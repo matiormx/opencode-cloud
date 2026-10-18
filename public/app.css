@@ -402,3 +402,19 @@ table.kv th, table.kv td { text-align: left; padding: 6px 4px; border-bottom: 1p
 table.kv th[scope=row] { font-weight: 500; color: var(--muted); width: 42%; }
 .ch-table { margin: 12px 0; }
 .ch-table summary { cursor: pointer; min-height: 32px; color: var(--muted); font-size: 14px; }
+
+/* Actividad de OpenCode */
+.oc-state { width: 100%; display: flex; align-items: center; gap: 8px; margin: -2px 0 8px; padding: 6px 10px; border: 0; background: none; color: var(--muted); font-size: 13px; cursor: pointer; text-align: left; min-height: 32px; }
+.oc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oc-rpm { font-variant-numeric: tabular-nums; }
+.st { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.st.work { background: var(--ok); animation: dotpulse 1.4s ease-in-out infinite; }
+.st.wait { background: var(--warn); }
+@keyframes dotpulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .st.work { animation: none; } }
+.wait-banner { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 12px; background: var(--card); font-size: 14px; }
+.wait-banner.hidden { display: none; }
+.act-list { list-style: none; margin: 4px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.act-list li { display: flex; gap: 10px; align-items: flex-start; }
+.act-list .st { margin-top: 6px; }
+.ch-xl { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); padding: 0 6px 0 34px; margin-top: -2px; }

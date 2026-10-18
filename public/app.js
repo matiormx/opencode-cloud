@@ -84,6 +84,7 @@ const state = {
   queue: { items: [], paused: false },
   featured: { pinned: [], recent: [] },
   sys: null,
+  act: null,
   models: null,
   model: store.get('model'),
   // En pantallas pequeñas Git es una hoja que empieza cerrada; en ≥1200px se recuerda la preferencia
@@ -186,6 +187,7 @@ async function mountApp() {
         <div class="chat" id="chat"><div class="chat-inner" id="chat-inner"></div></div>
         <button class="to-bottom hidden" id="to-bottom" aria-label="Ir al final">${ico(I.down)}</button>
         <div class="composer-wrap">
+          <div class="wait-banner hidden" id="wait" role="status" aria-live="polite"></div>
           <div class="queue hidden" id="queue" aria-live="polite"></div>
           <div class="composer">
             <textarea id="input" rows="1" placeholder="Pide algo a OpenCode…" aria-label="Mensaje"></textarea>
@@ -202,7 +204,7 @@ async function mountApp() {
 
   bindShell();
   updateOnlineBanner();
-  await Promise.all([loadProjects(), loadModels(), loadUpdate(false), loadFeatured(), loadSys()]);
+  await Promise.all([loadProjects(), loadModels(), loadUpdate(false), loadFeatured(), loadSys(), loadActivity()]);
   renderAll();
   const last = store.get('project');
   const target = state.projects.find((p) => p.id === last) || state.projects[0];
@@ -212,6 +214,8 @@ async function mountApp() {
     timersStarted = true;
     setInterval(pollStatus, 2500);
     setInterval(() => { if (!document.hidden && $('#sysmon-slot')) loadSys(); }, 10_000);
+    setInterval(() => { if (!document.hidden && $('#sysmon-slot')) loadActivity(); }, 5000);
+    setInterval(() => { if (!document.hidden && state.act) { const slot = $('#sysmon-slot'); if (slot) slot.innerHTML = sysCardHtml(); renderWait(); } }, 1000);
     setInterval(() => { if (state.queue.items.length) loadQueue(); }, 4000);
     setInterval(() => { if ($('#sidebar')) loadUpdate(false); }, 10 * 60_000);
   }
@@ -225,6 +229,7 @@ function renderAll() {
   renderModels();
   renderGit();
   renderQueue();
+  renderWait();
   applyPanelState();
   updateSendButton();
 }
@@ -299,12 +304,59 @@ function sparkSvg(values, { w = 120, h = 28 } = {}) {
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/><circle cx="${x(last).toFixed(1)}" cy="${y(values[last]).toFixed(1)}" r="3" fill="var(--s1)" stroke="var(--card)" stroke-width="2"/></svg>`;
 }
 
+
+/* ============================== Actividad de OpenCode ============================== */
+const remainingSec = (row) => (row?.retry?.inSec == null ? null : Math.max(0, row.retry.inSec - Math.floor((Date.now() - (state.act?.at || Date.now())) / 1000)));
+
+function ocStateHtml() {
+  const a = state.act;
+  if (!a) return '';
+  const rows = a.sessions || [];
+  const retrying = rows.filter((r) => r.state === 'retrying');
+  const perm = rows.filter((r) => r.state === 'permission');
+  const working = rows.filter((r) => r.state === 'working');
+  const rpm = a.requests?.rpm ?? 0;
+  let dot = 'idle', text = 'OpenCode inactivo';
+  if (retrying.length) { dot = 'wait'; const s = remainingSec(retrying[0]); text = `Esperando al proveedor${s != null ? ` · reintento en ${s} s` : ''}`; }
+  else if (perm.length) { dot = 'wait'; text = `Esperando tu permiso${perm.length > 1 ? ` (${perm.length})` : ''}`; }
+  else if (working.length) { dot = 'work'; text = `Trabajando${working.length > 1 ? ` en ${working.length} conversaciones` : ''}`; }
+  return `<button class="oc-state" data-act="sysmon" aria-label="Estado de OpenCode: ${esc(text)}"><span class="st ${dot}" aria-hidden="true"></span><span class="oc-text">${esc(text)}</span><span class="oc-rpm">${rpm} pet/min</span></button>`;
+}
+
+function renderWait() {
+  const box = $('#wait');
+  if (!box) return;
+  const row = (state.act?.sessions || []).find((r) => r.sessionId === state.sessionId && r.projectId === state.project?.id);
+  if (row?.state === 'retrying') {
+    const s = remainingSec(row);
+    box.innerHTML = `<span class="wait-ico" aria-hidden="true">⏳</span><span><strong>Esperando al proveedor.</strong> ${esc(row.retry.message || 'Límite de peticiones o error temporal')} · reintento ${row.retry.attempt}${s != null ? ` · próximo intento en ${s} s` : ''}</span>`;
+    box.classList.remove('hidden');
+  } else if (row?.state === 'permission') {
+    box.innerHTML = '<span class="wait-ico" aria-hidden="true">🔒</span><span><strong>Esperando tu permiso</strong> para continuar.</span>';
+    box.classList.remove('hidden');
+  } else {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+  }
+}
+
+async function loadActivity() {
+  try {
+    const a = await api('GET', '/api/activity');
+    a.at = Date.now();
+    state.act = a;
+    const slot = $('#sysmon-slot');
+    if (slot) slot.innerHTML = sysCardHtml();
+    renderWait();
+  } catch { /* se reintenta en el siguiente ciclo */ }
+}
+
 function sysCardHtml() {
   const s = state.sys;
-  if (!s || !s.history.length) return `<button class="sysmon" data-act="sysmon" aria-label="Recursos del servidor"><span class="muted" style="font-size:13px">Recursos del servidor…</span></button>`;
+  if (!s || !s.history.length) return `<button class="sysmon" data-act="sysmon" aria-label="Recursos del servidor"><span class="muted" style="font-size:13px">Recursos del servidor…</span></button>${ocStateHtml()}`;
   const cpu = s.now.cpu, mem = s.now.mem.total ? (s.now.mem.used / s.now.mem.total) * 100 : 0;
   const col = (label, v, key) => `<span class="sm-col"><span class="sm-top"><span class="sm-label">${label}</span><span class="sm-val">${pct(v)}</span>${v >= HIGH ? '<span class="sm-high" title="Uso alto">▲ alto</span>' : ''}</span>${sparkSvg(s.history.map((p) => p[key]))}</span>`;
-  return `<button class="sysmon" data-act="sysmon" aria-label="Ver recursos del servidor en detalle">${col('CPU', cpu, 'cpu')}${col('RAM', mem, 'mem')}</button>`;
+  return `<button class="sysmon" data-act="sysmon" aria-label="Ver recursos del servidor en detalle">${col('CPU', cpu, 'cpu')}${col('RAM', mem, 'mem')}</button>${ocStateHtml()}`;
 }
 
 async function loadSys(points = 30) {
@@ -362,11 +414,77 @@ function lineChart({ id, series, data, yMax, yFmt, valFmt, h = 120 }) {
   hit.addEventListener('pointerleave', hide);
 }
 
+
+function barChart({ id, data, h = 110 }) {
+  const wrap = document.getElementById(id);
+  if (!wrap) return;
+  const W = Math.max(240, wrap.clientWidth || 320), H = h, L = 34, R = 6, T = 8, B = 20;
+  const n = data.length;
+  const peak = Math.max(...data.map((d) => d.req), 0);
+  const yMax = Math.max(4, Math.ceil(peak / 4) * 4);
+  const slot = (W - L - R) / n, bw = Math.max(2, Math.min(24, slot - 2));
+  const x = (i) => L + i * slot + (slot - bw) / 2;
+  const y = (v) => T + (1 - v / yMax) * (H - T - B);
+  const grid = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - R}" y1="${y(yMax * f).toFixed(1)}" y2="${y(yMax * f).toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 6}" y="${(y(yMax * f) + 4).toFixed(1)}" text-anchor="end" class="ch-ax">${Math.round(yMax * f)}</text>`).join('');
+  const bars = data.map((d, i) => d.req ? `<path d="M${x(i).toFixed(1)} ${y(0).toFixed(1)}V${(y(d.req) + 1.5).toFixed(1)}a1.5 1.5 0 0 1 1.5-1.5h${Math.max(0, bw - 3).toFixed(1)}a1.5 1.5 0 0 1 1.5 1.5V${y(0).toFixed(1)}z" fill="var(--s1)"/>` : '').join('');
+  const marks = data.map((d, i) => (d.retry || d.err) ? `<circle cx="${(x(i) + bw / 2).toFixed(1)}" cy="${(H - B + 8).toFixed(1)}" r="2.5" fill="var(--s2)"/>` : '').join('');
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="Peticiones al modelo por minuto, última hora">${grid}${bars}${marks}
+    <text x="${L}" y="${H - 1}" class="ch-ax" style="display:none"></text><rect class="ch-hit" x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent"/><line class="ch-cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" style="display:none"/></svg><div class="ch-tip" role="status" hidden></div>
+    <div class="ch-xl"><span>hace 60 min</span><span>ahora</span></div>`;
+  const svg = wrap.querySelector('svg'), tip = wrap.querySelector('.ch-tip'), cross = wrap.querySelector('.ch-cross'), hit = wrap.querySelector('.ch-hit');
+  const show = (clientX) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((clientX - r.left) / r.width) * W;
+    const i = Math.min(n - 1, Math.max(0, Math.floor((px - L) / slot)));
+    const d = data[i];
+    cross.setAttribute('x1', x(i) + bw / 2); cross.setAttribute('x2', x(i) + bw / 2); cross.style.display = '';
+    tip.hidden = false; tip.textContent = '';
+    const head = document.createElement('div'); head.className = 'ch-tip-time';
+    head.textContent = new Date(d.t).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    tip.append(head);
+    for (const [label, v, color] of [['peticiones', d.req, 'var(--s1)'], ['reintentos', d.retry, 'var(--s2)'], ['errores', d.err, 'var(--s2)']]) {
+      const row = document.createElement('div'); row.className = 'ch-tip-row';
+      const k = document.createElement('i'); k.style.background = color;
+      const val = document.createElement('strong'); val.textContent = String(v);
+      const lab = document.createElement('span'); lab.textContent = label;
+      row.append(k, val, lab); tip.append(row);
+    }
+    const tw = tip.offsetWidth;
+    tip.style.left = `${Math.min(Math.max(4, ((x(i) + bw / 2) / W) * r.width - tw / 2), r.width - tw - 4)}px`;
+  };
+  const hide = () => { tip.hidden = true; cross.style.display = 'none'; };
+  hit.addEventListener('pointermove', (e) => show(e.clientX));
+  hit.addEventListener('pointerdown', (e) => show(e.clientX));
+  hit.addEventListener('pointerleave', hide);
+}
+
+function activityBlockHtml(a) {
+  const r = a.requests;
+  const rows = a.sessions || [];
+  const label = { working: 'Trabajando', retrying: 'Esperando al proveedor', permission: 'Esperando tu permiso' };
+  const list = rows.length
+    ? `<ul class="act-list">${rows.map((x) => `<li><span class="st ${x.state === 'working' ? 'work' : 'wait'}" aria-hidden="true"></span><span class="grow"><strong>${esc(x.title || 'Conversación')}</strong> <span class="muted">· ${esc(x.projectName)}</span><br><span class="muted" style="font-size:13px">${label[x.state]}${x.retry ? ` · reintento ${x.retry.attempt}${x.retry.inSec != null ? ` en ${x.retry.inSec} s` : ''} · ${esc(x.retry.message)}` : ''}</span></span></li>`).join('')}</ul>`
+    : '<p class="muted" style="margin:6px 0">OpenCode no está trabajando ahora mismo.</p>';
+  const last = r.lastError ? `<tr><th scope="row">Último error</th><td>${esc(new Date(r.lastError.t).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }))} · ${r.lastError.status ? `${r.lastError.status} · ` : ''}${esc(r.lastError.message.slice(0, 140))}</td></tr>` : '';
+  return `
+    <div class="ch-block"><div class="ch-head"><h3>Peticiones al modelo</h3><span class="ch-now">${r.rpm} /min</span></div>
+      <div class="ch-legend" style="margin-bottom:4px"><span><i style="background:var(--s1);height:8px;width:8px;border-radius:2px"></i>Peticiones por minuto</span><span><i style="background:var(--s2);height:8px;width:8px;border-radius:50%"></i>Minuto con reintento o error</span></div>
+      <div class="ch" id="ch-req"></div></div>
+    <table class="kv"><tbody>
+      <tr><th scope="row">Última hora</th><td>${r.total1h} petición${r.total1h === 1 ? '' : 'es'} · ${r.retries1h} reintento${r.retries1h === 1 ? '' : 's'} · ${r.errors1h} error${r.errors1h === 1 ? '' : 'es'}</td></tr>
+      <tr><th scope="row">Tokens (1 h)</th><td>${r.tokens1h.toLocaleString('es-ES')}${r.cost1h ? ` · coste ${r.cost1h.toLocaleString('es-ES', { maximumFractionDigits: 4 })} USD` : ''}</td></tr>
+      ${last}
+    </tbody></table>
+    <h3>OpenCode ahora</h3>${list}`;
+}
+
 function sysModal() {
-  const m = openModal('Recursos del servidor', '<p class="muted">Cargando…</p>', { wide: true });
+  const m = openModal('Recursos y peticiones', '<p class="muted">Cargando…</p>', { wide: true });
   let timer = null;
   const draw = async () => {
     let d;
+    let act = null;
+    try { act = await api('GET', '/api/activity'); act.at = Date.now(); state.act = act; } catch { /* sin datos de actividad */ }
     try { d = await api('GET', '/api/system?points=360'); } catch (e) { m.body.innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
     state.sys = d;
     const el = $('#sysmon-slot'); if (el) el.innerHTML = sysCardHtml();
@@ -382,6 +500,7 @@ function sysModal() {
       ['CPU', (x) => pct(x), 'cpu'], ['Memoria', (x) => pct(x), 'mem'], ['Red ↓ (recibida)', fmtRate, 'rx'], ['Red ↑ (enviada)', fmtRate, 'tx'],
     ].map(([lab, f, key]) => `<tr><th scope="row">${lab}</th><td>${f(agg(key, (v) => Math.min(...v)))}</td><td>${f(agg(key, avg))}</td><td>${f(agg(key, (v) => Math.max(...v)))}</td></tr>`).join('');
     m.body.innerHTML = `
+      ${act ? activityBlockHtml(act) : ''}
       <div class="ch-block"><div class="ch-head"><h3>CPU</h3><span class="ch-now">${pct(now.cpu)}${now.cpu >= HIGH ? ' <span class="sm-high">▲ alto</span>' : ''}</span></div><div class="ch" id="ch-cpu"></div></div>
       <div class="ch-block"><div class="ch-head"><h3>Memoria</h3><span class="ch-now">${pct(memPct)}${memPct >= HIGH ? ' <span class="sm-high">▲ alto</span>' : ''}</span></div><div class="ch" id="ch-mem"></div></div>
       <div class="ch-block"><div class="ch-head"><h3>Red</h3><span class="ch-legend"><span><i style="background:var(--s1)"></i>Recibida ${fmtRate(now.net?.rx ?? 0)}</span><span><i style="background:var(--s2)"></i>Enviada ${fmtRate(now.net?.tx ?? 0)}</span></span></div><div class="ch" id="ch-net"></div></div>
@@ -396,6 +515,7 @@ function sysModal() {
       <details class="ch-table"><summary>Ver como tabla (últimos ${Math.max(1, Math.round(history.length * d.intervalMs / 60000))} min)</summary>
         <table class="kv"><thead><tr><th></th><th>Mín.</th><th>Media</th><th>Máx.</th></tr></thead><tbody>${tableRows}</tbody></table></details>
       <p class="muted" style="font-size:12px">Una muestra cada ${Math.round(d.intervalMs / 1000)} s; se guarda la última hora (se reinicia al reiniciar el servicio).</p>`;
+    if (act) barChart({ id: 'ch-req', data: act.requests.perMinute });
     if (history.length >= 2) {
       lineChart({ id: 'ch-cpu', series: [{ key: 'cpu', label: 'CPU', color: 'var(--s1)' }], data: history, yMax: 100, yFmt: pct, valFmt: pct });
       lineChart({ id: 'ch-mem', series: [{ key: 'mem', label: 'Memoria', color: 'var(--s1)' }], data: history, yMax: 100, yFmt: pct, valFmt: pct });

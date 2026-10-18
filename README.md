@@ -5,7 +5,7 @@ WebUI al estilo Claude para [OpenCode](https://opencode.ai), pensada para un VPS
 - **Proyectos**: crea proyectos vacíos o clónalos desde GitHub; cada uno es una carpeta git en el servidor con sus propias conversaciones.
 - **Chat con OpenCode**: respuestas en streaming, herramientas desplegables, solicitud de permisos, selector de modelo y API keys de proveedores.
 - **Destacadas y recientes**: encima de los proyectos salen tus conversaciones destacadas (★) y las 5 más recientes de todos los proyectos; desde ⋯ se cambia el título, se destaca o se elimina.
-- **Recursos del VPS**: en el menú lateral, minigráficos de CPU y RAM; al pulsarlos se abre el detalle de la última hora (CPU, memoria, red), con disco, carga y tiempo encendido.
+- **Recursos del VPS y peticiones**: en el menú lateral, minigráficos de CPU y RAM y una línea con el estado de OpenCode (inactivo, trabajando, esperando al proveedor o esperando tu permiso). Al pulsarlo se abre el detalle de la última hora: peticiones al modelo por minuto, reintentos y errores (por ejemplo, un límite de peticiones del proveedor), CPU, memoria, red, disco y carga. Si una conversación espera al proveedor, aparece un aviso sobre el cuadro de texto con el motivo y cuándo reintenta.
 - **Cola de mensajes**: si OpenCode está trabajando, lo que escribas espera en una cola y se envía solo cuando termine, en orden y con el modelo elegido. Vive en el servidor, así que sigue aunque cierres la app.
 - **Git y GitHub**: fetch, pull (fusión), push, commit, ramas, fusionar ramas, resolución de conflictos asistida por OpenCode, y crear/fusionar Pull Requests.
 - **PWA mobile-first**: se instala como aplicación en móvil, tablet y escritorio, con cajón lateral, hojas inferiores y soporte de teclado en pantalla.

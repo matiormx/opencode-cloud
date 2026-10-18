@@ -10,6 +10,7 @@ import * as git from './git.js';
 import * as gh from './github.js';
 import * as oc from './opencode.js';
 import * as queue from './queue.js';
+import * as reqmon from './reqmon.js';
 import * as sysmon from './sysmon.js';
 import * as store from './store.js';
 import * as updater from './updater.js';
@@ -83,21 +84,48 @@ app.post('/api/logout', (req, res) => {
 // ---------- Protegido ----------
 app.use('/api', auth.requireAuth, router);
 
-// --- Trabajo en curso (conversaciones ocupadas en cualquier proyecto) ---
+// --- Trabajo en curso: qué conversaciones están trabajando, esperando al proveedor o pendientes de permiso ---
 router.get(
   '/activity',
   wrap(async (req, res) => {
-    const out = [];
+    const sessions = [];
     await Promise.all(
       loadProjects().map(async (pr) => {
+        const dir = withPath(pr).path;
         try {
-          const dir = withPath(pr).path;
-          const st = await oc.json('GET', '/session/status', { directory: dir });
-          for (const [id, v] of Object.entries(st || {})) if (v && v.type !== 'idle') out.push({ projectId: pr.id, projectName: pr.name, sessionId: id });
+          const [st, perms] = await Promise.all([
+            oc.json('GET', '/session/status', { directory: dir }),
+            oc.json('GET', '/permission', { directory: dir }).catch(() => []),
+          ]);
+          const pending = new Set((Array.isArray(perms) ? perms : []).map((x) => x.sessionID));
+          const ids = new Set([...Object.keys(st || {}).filter((k) => st[k] && st[k].type !== 'idle'), ...pending]);
+          if (!ids.size) return;
+          let titles = new Map();
+          try {
+            const list = await oc.json('GET', '/session', { directory: dir });
+            titles = new Map((Array.isArray(list) ? list : []).map((x) => [x.id, x.title || '']));
+          } catch { /* sin títulos */ }
+          for (const id of ids) {
+            const v = st?.[id];
+            const row = { projectId: pr.id, projectName: pr.name, sessionId: id, title: titles.get(id) || '', state: 'working' };
+            if (pending.has(id)) row.state = 'permission';
+            else if (v?.type === 'retry') {
+              const next = Number(v.next) || 0;
+              const nextAt = next > 1e11 ? next : next ? Date.now() + next : 0;
+              row.state = 'retrying';
+              row.retry = { attempt: v.attempt || 0, message: String(v.message || '').slice(0, 300), inSec: nextAt ? Math.max(0, Math.round((nextAt - Date.now()) / 1000)) : null };
+            }
+            sessions.push(row);
+          }
         } catch { /* OpenCode no responde: no hay nada que interrumpir */ }
       }),
     );
-    res.json({ busy: out, queued: queue.countAll() });
+    res.json({
+      busy: sessions.map(({ projectId, projectName, sessionId }) => ({ projectId, projectName, sessionId })),
+      sessions,
+      queued: queue.countAll(),
+      requests: reqmon.snapshot(),
+    });
   }),
 );
 
@@ -608,6 +636,7 @@ oc.start();
 updater.startPeriodicCheck();
 queue.start();
 sysmon.start();
+reqmon.start();
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`opencode-cloud escuchando en http://${config.host}:${config.port}  (datos: ${config.dataDir})`);
