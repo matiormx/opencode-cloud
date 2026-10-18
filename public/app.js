@@ -882,7 +882,7 @@ async function settingsModal(section) {
           <a class="btn" href="${GH_TOKEN_CLASSIC}" target="_blank" rel="noopener noreferrer">Crear token clásico (más rápido)</a>
         </div>
         <p class="muted" style="font-size:13.5px;margin:0 0 12px"><strong>Recomendado</strong> (fine-grained): se abre ya con los permisos <em>Contents</em> y <em>Pull requests</em> en lectura y escritura; solo tienes que elegir en la página los repositorios a los que dará acceso y pulsar «Generate token». <strong>Clásico</strong>: viene con el permiso <code>repo</code> marcado y da acceso a todos tus repos. GitHub muestra el token una sola vez: cópialo y pégalo aquí. Se guarda solo en tu servidor.</p>
-        <div class="row"><input id="gh-token" type="password" placeholder="github_pat_… o ghp_…" autocomplete="off" class="grow"><button class="btn primary" id="gh-save">Guardar</button></div>`}
+        <div class="row"><input id="gh-token" name="gh-pat-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="github_pat_… o ghp_…"><button class="btn primary" id="gh-save">Guardar</button></div>`}
     </div>
 
     <h3>Identidad de Git</h3>
@@ -890,7 +890,7 @@ async function settingsModal(section) {
 
     <h3>Proveedores de IA</h3>
     <p class="muted" style="margin-top:0">Añade una API key para que aparezcan sus modelos en el selector.</p>
-    <div class="row wrap"><select id="prov-id" class="grow">${providerOptions}</select><input id="prov-key" type="password" class="grow" placeholder="API key" autocomplete="off"><button class="btn" id="prov-save">Guardar</button></div>
+    <div class="row wrap"><select id="prov-id" class="grow">${providerOptions}</select><input id="prov-key" name="provider-key-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="API key"><button class="btn" id="prov-save">Guardar</button></div>
 
     <h3>OpenCode</h3>
     <p style="margin-top:0">Estado: ${oc.healthy ? '<span style="color:var(--ok)">en marcha</span>' : '<span style="color:var(--err)">no responde</span>'}${oc.version ? ` · versión ${esc(oc.version)}` : ''}</p>

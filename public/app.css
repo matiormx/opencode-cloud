@@ -315,3 +315,6 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
   body { user-select: none; -webkit-user-select: none; }
   .msg, .tool pre, pre.code, input, textarea, .output, .files, .log { user-select: text; -webkit-user-select: text; }
 }
+
+/* Campos secretos (API keys/tokens): texto enmascarado sin activar el gestor de contraseñas */
+input.secret { -webkit-text-security: disc; text-security: disc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
