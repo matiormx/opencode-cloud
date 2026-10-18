@@ -4,6 +4,7 @@ WebUI al estilo Claude para [OpenCode](https://opencode.ai), pensada para un VPS
 
 - **Proyectos**: crea proyectos vacíos o clónalos desde GitHub; cada uno es una carpeta git en el servidor con sus propias conversaciones.
 - **Chat con OpenCode**: respuestas en streaming, herramientas desplegables, solicitud de permisos, selector de modelo y API keys de proveedores.
+- **Cola de mensajes**: si OpenCode está trabajando, lo que escribas espera en una cola y se envía solo cuando termine, en orden y con el modelo elegido. Vive en el servidor, así que sigue aunque cierres la app.
 - **Git y GitHub**: fetch, pull (fusión), push, commit, ramas, fusionar ramas, resolución de conflictos asistida por OpenCode, y crear/fusionar Pull Requests.
 - **PWA mobile-first**: se instala como aplicación en móvil, tablet y escritorio, con cajón lateral, hojas inferiores y soporte de teclado en pantalla.
 - **Autoactualización**: la WebUI compara tu instalación con la rama de GitHub y actualiza con un clic (con vuelta atrás a la versión anterior).
@@ -79,6 +80,10 @@ El instalador se puede volver a ejecutar sin riesgo: actualiza el código, conse
    - *Clásico*: scope `repo`.
 3. **Ajustes → Proveedores de IA**: añade la API key de tu proveedor (Anthropic, OpenAI, OpenRouter, …). Los modelos aparecen en el selector del chat.
 4. **Nuevo proyecto → Clonar desde GitHub**, elige un repositorio, y empieza a pedirle cosas a OpenCode.
+
+### Cola de mensajes
+
+Mientras OpenCode trabaja, el botón de enviar pasa a **Añadir a la cola** en cuanto escribes algo (y vuelve a ser **Detener** con el campo vacío). Los mensajes en espera aparecen encima del cuadro de texto: quita uno con la ✕ o usa **Vaciar**. Al pulsar **Detener** la cola se pone **en pausa** para que no arranque sola otra tarea; usa **Reanudar** para continuar. Máximo 20 mensajes por conversación.
 
 ### Sincronizar con GitHub
 

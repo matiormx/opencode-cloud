@@ -9,6 +9,7 @@ import { config } from './config.js';
 import * as git from './git.js';
 import * as gh from './github.js';
 import * as oc from './opencode.js';
+import * as queue from './queue.js';
 import * as store from './store.js';
 import * as updater from './updater.js';
 
@@ -228,6 +229,7 @@ router.delete(
   wrap(async (req, res) => {
     const p = getProject(req);
     saveProjects(loadProjects().filter((x) => x.id !== p.id));
+    queue.dropProject(p.id);
     if (req.query.files === '1') {
       // Defensa: solo se borra si la ruta está estrictamente dentro de projectsDir
       const rel = path.relative(config.projectsDir, p.path);
@@ -330,8 +332,40 @@ router.post('/projects/:id/sessions', ocRoute((dir, req) => oc.json('POST', '/se
 router.get('/projects/:id/sessions/:sid/messages', ocRoute((dir, req) => oc.json('GET', `/session/${sid(req)}/message`, { directory: dir, query: { limit: 300 } })));
 router.get('/projects/:id/sessions/:sid/diff', ocRoute((dir, req) => oc.json('GET', `/session/${sid(req)}/diff`, { directory: dir })));
 router.patch('/projects/:id/sessions/:sid', ocRoute((dir, req) => oc.json('PATCH', `/session/${sid(req)}`, { directory: dir, body: { title: String(req.body?.title || '').slice(0, 120) } })));
-router.delete('/projects/:id/sessions/:sid', ocRoute((dir, req) => oc.json('DELETE', `/session/${sid(req)}`, { directory: dir })));
-router.post('/projects/:id/sessions/:sid/abort', ocRoute((dir, req) => oc.json('POST', `/session/${sid(req)}/abort`, { directory: dir })));
+router.delete(
+  '/projects/:id/sessions/:sid',
+  wrap(async (req, res) => {
+    const p = getProject(req);
+    queue.clear(p.id, sid(req));
+    res.json(await oc.json('DELETE', `/session/${sid(req)}`, { directory: p.path }));
+  }),
+);
+router.post(
+  '/projects/:id/sessions/:sid/abort',
+  wrap(async (req, res) => {
+    const p = getProject(req);
+    queue.pauseIfAny(p.id, sid(req));
+    res.json(await oc.json('POST', `/session/${sid(req)}/abort`, { directory: p.path }));
+  }),
+);
+
+// --- Cola de mensajes ---
+router.get('/projects/:id/sessions/:sid/queue', wrap(async (req, res) => { const p = getProject(req); res.json(queue.list(p.id, sid(req))); }));
+router.post(
+  '/projects/:id/sessions/:sid/queue',
+  wrap(async (req, res) => {
+    const p = getProject(req);
+    res.json(queue.add(p.id, sid(req), req.body?.text, req.body?.model));
+  }),
+);
+router.delete('/projects/:id/sessions/:sid/queue/:qid', wrap(async (req, res) => {
+  const p = getProject(req);
+  if (!/^[a-f0-9]{1,32}$/.test(req.params.qid)) throw fail('Elemento no válido');
+  queue.remove(p.id, sid(req), req.params.qid);
+  res.json({ ok: true });
+}));
+router.delete('/projects/:id/sessions/:sid/queue', wrap(async (req, res) => { const p = getProject(req); queue.clear(p.id, sid(req)); res.json({ ok: true }); }));
+router.post('/projects/:id/sessions/:sid/queue/resume', wrap(async (req, res) => { const p = getProject(req); queue.setPaused(p.id, sid(req), false); res.json({ ok: true }); }));
 router.get('/projects/:id/status', ocRoute((dir) => oc.json('GET', '/session/status', { directory: dir })));
 
 router.post(
@@ -488,6 +522,7 @@ app.use((err, req, res, next) => {
 // ---------- Arranque ----------
 oc.start();
 updater.startPeriodicCheck();
+queue.start();
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`opencode-cloud escuchando en http://${config.host}:${config.port}  (datos: ${config.dataDir})`);

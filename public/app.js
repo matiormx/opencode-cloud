@@ -81,6 +81,7 @@ const state = {
   messages: [],
   busy: false,
   busyGrace: 0,
+  queue: { items: [], paused: false },
   models: null,
   model: store.get('model'),
   // En pantallas pequeñas Git es una hoja que empieza cerrada; en ≥1200px se recuerda la preferencia
@@ -183,6 +184,7 @@ async function mountApp() {
         <div class="chat" id="chat"><div class="chat-inner" id="chat-inner"></div></div>
         <button class="to-bottom hidden" id="to-bottom" aria-label="Ir al final">${ico(I.down)}</button>
         <div class="composer-wrap">
+          <div class="queue hidden" id="queue" aria-live="polite"></div>
           <div class="composer">
             <textarea id="input" rows="1" placeholder="Pide algo a OpenCode…" aria-label="Mensaje"></textarea>
             <div class="composer-bar">
@@ -207,6 +209,7 @@ async function mountApp() {
   if (!timersStarted) {
     timersStarted = true;
     setInterval(pollStatus, 2500);
+    setInterval(() => { if (state.queue.items.length) loadQueue(); }, 4000);
     setInterval(() => { if ($('#sidebar')) loadUpdate(false); }, 10 * 60_000);
   }
 }
@@ -218,6 +221,7 @@ function renderAll() {
   renderMessages();
   renderModels();
   renderGit();
+  renderQueue();
   applyPanelState();
   updateSendButton();
 }
@@ -317,6 +321,7 @@ async function selectProject(id) {
   state.sessionId = null;
   state.messages = [];
   state.busy = false;
+  state.queue = { items: [], paused: false };
   state.git = null;
   state.perms.clear();
   store.set('project', id);
@@ -342,12 +347,14 @@ async function loadSessions() {
 async function selectSession(id, keepNav = false) {
   state.sessionId = id;
   state.messages = [];
+  state.queue = { items: [], paused: false };
   state.perms.clear();
   store.set(`session:${state.project.id}`, id);
   if (!keepNav) state.navOpen = false;
   renderAll();
   await refreshMessages(true);
   await pollStatus(true);
+  loadQueue();
 }
 
 async function newSession() {
@@ -386,6 +393,25 @@ async function pollStatus(initial = false) {
   } catch { /* se reintenta en el siguiente ciclo */ }
 }
 
+async function loadQueue() {
+  if (!state.project || !state.sessionId) { state.queue = { items: [], paused: false }; renderQueue(); return; }
+  const pid = state.project.id, sid = state.sessionId;
+  try {
+    const q = await api('GET', `/api/projects/${pid}/sessions/${sid}/queue`);
+    if (state.project?.id === pid && state.sessionId === sid) { state.queue = q; renderQueue(); updateSendButton(); }
+  } catch { /* se reintenta en el siguiente evento */ }
+}
+
+function renderQueue() {
+  const box = $('#queue');
+  if (!box) return;
+  const { items, paused } = state.queue;
+  box.classList.toggle('hidden', !items.length);
+  if (!items.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="queue-head"><strong>En cola (${items.length})</strong>${paused ? '<span class="queue-paused">en pausa</span>' : ''}<span class="grow"></span>${paused ? '<button class="btn small" data-act="queue-resume">Reanudar</button>' : ''}<button class="btn small ghost" data-act="queue-clear">Vaciar</button></div>` +
+    items.map((i, n) => `<div class="queue-item"><span class="queue-n">${n + 1}</span><span class="queue-text">${esc(i.text.length > 160 ? `${i.text.slice(0, 160)}…` : i.text)}</span><button class="icon-btn" data-act="queue-del" data-id="${esc(i.id)}" aria-label="Quitar de la cola">${ico(I.x, 'width="16" height="16"')}</button></div>`).join('');
+}
+
 function setBusy(v) {
   state.busy = v;
   updateSendButton();
@@ -409,7 +435,7 @@ function connectEvents() {
 let refreshTimer = null;
 const scheduleRefresh = () => {
   clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => refreshMessages(), 180);
+  refreshTimer = setTimeout(() => { refreshMessages(); if (state.queue.items.length) loadQueue(); }, 180);
 };
 let sessionsTimer = null;
 
@@ -424,6 +450,7 @@ function handleEvent(ev) {
     setBusy(false);
     refreshMessages();
     loadSessions();
+    setTimeout(loadQueue, 2500);
   } else if (t === 'session.status' && mine) {
     const running = p.status?.type && p.status.type !== 'idle';
     if (running) setBusy(true);
@@ -625,9 +652,14 @@ function modelPicker() {
 function updateSendButton() {
   const b = $('#send');
   if (!b) return;
-  b.classList.toggle('stop', state.busy);
-  b.innerHTML = ico(state.busy ? I.stop : I.send);
-  b.setAttribute('aria-label', state.busy ? 'Detener' : 'Enviar');
+  const typed = Boolean($('#input')?.value.trim());
+  const stop = state.busy && !typed;
+  b.classList.toggle('stop', stop);
+  b.innerHTML = ico(stop ? I.stop : I.send);
+  b.setAttribute('aria-label', stop ? 'Detener' : state.busy ? 'Añadir a la cola' : 'Enviar');
+  b.title = state.busy && typed ? 'Se enviará cuando OpenCode termine' : '';
+  const inp = $('#input');
+  if (inp) inp.placeholder = state.busy ? 'Trabajando… escribe para añadir a la cola' : 'Pide algo a OpenCode…';
   b.disabled = !state.project;
 }
 
@@ -663,14 +695,28 @@ async function sendMessage(text) {
 
 async function submitInput() {
   const input = $('#input');
-  if (state.busy) {
-    try { await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/abort`); } catch (e) { toast(e.message, 'err'); }
+  const text = input.value;
+  if (state.busy && !text.trim()) {
+    if (!state.sessionId) return;
+    try { await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/abort`); loadQueue(); } catch (e) { toast(e.message, 'err'); }
     return;
   }
-  const text = input.value;
-  if (!text.trim()) return;
+  if (!text.trim() || !state.project) return;
+  if (state.busy) {
+    // OpenCode está ocupado: el mensaje espera en la cola del servidor
+    const [providerID, modelID] = (state.model || '').split('::');
+    try {
+      await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue`, { text, model: providerID && modelID ? { providerID, modelID } : undefined });
+      input.value = '';
+      autosize(input);
+      updateSendButton();
+      await loadQueue();
+    } catch (e) { toast(e.message, 'err'); }
+    return;
+  }
   input.value = '';
   autosize(input);
+  updateSendButton();
   await sendMessage(text);
 }
 
@@ -1064,6 +1110,9 @@ function bindShell() {
       switch (act) {
         case 'close-panels': closePanels(); break;
         case 'model-picker': modelPicker(); break;
+        case 'queue-del': await api('DELETE', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/${t.dataset.id}`); await loadQueue(); break;
+        case 'queue-clear': await api('DELETE', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue`); await loadQueue(); break;
+        case 'queue-resume': await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/resume`, {}); await loadQueue(); break;
         case 'install-app': await installApp(); break;
         case 'select-project': if (state.project?.id !== t.dataset.id) await selectProject(t.dataset.id); break;
         case 'project-menu': e.stopPropagation(); state.navOpen = false; applyPanelState(); projectMenuModal(t.dataset.id); break;
@@ -1144,7 +1193,7 @@ function bindShell() {
   });
 
   const input = $('#input');
-  input.addEventListener('input', () => autosize(input));
+  input.addEventListener('input', () => { autosize(input); updateSendButton(); });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submitInput(); }
   });
