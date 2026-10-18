@@ -525,7 +525,7 @@ function sysModal() {
         ${statRow('Encendido desde hace', fmtUptime(now.uptime))}
         ${eg ? statRow('Salida a internet', eg.tunnel ? `por túnel WireGuard (casa) · IP ${esc(eg.ip || 'sin respuesta')}` : `directa desde el VPS${eg.ip ? ` · IP ${esc(eg.ip)}` : ''}`) : ''}
       </tbody></table>
-      ${eg && !eg.tunnel ? '<p class="muted" style="font-size:12px">¿Bloqueos por la IP del VPS? Puedes sacar solo a OpenCode por tu servidor WireGuard de casa: <code>sudo /opt/opencode-cloud/deploy/egress.sh install cliente.conf</code></p>' : ''}
+      ${eg && !eg.tunnel ? '<p class="muted" style="font-size:12px">¿Bloqueos por la IP del VPS? Puedes sacar solo a OpenCode por tu servidor WireGuard de casa: <button class="btn small" data-act="settings" data-section="egress">Configurar en Ajustes</button></p>' : ''}
       <details class="ch-table"><summary>Ver como tabla (últimos ${Math.max(1, Math.round(history.length * d.intervalMs / 60000))} min)</summary>
         <table class="kv"><thead><tr><th></th><th>Mín.</th><th>Media</th><th>Máx.</th></tr></thead><tbody>${tableRows}</tbody></table></details>
       <p class="muted" style="font-size:12px">Una muestra cada ${Math.round(d.intervalMs / 1000)} s; se guarda la última hora (se reinicia al reiniciar el servicio).</p>`;
@@ -1318,13 +1318,15 @@ function projectMenuModal(id) {
 /* ============================== Ajustes y actualizaciones ============================== */
 async function settingsModal(section) {
   const m = openModal('Ajustes', '<p class="muted">Cargando…</p>', { wide: true });
-  const [settings, gh, oc, upd, models] = await Promise.all([
+  const [settings, gh, oc, upd, models, eg0] = await Promise.all([
     api('GET', '/api/settings'),
     api('GET', '/api/github/status').catch(() => ({ connected: false })),
     api('GET', '/api/opencode/status').catch(() => ({})),
     api('GET', '/api/update/status').catch(() => null),
     api('GET', '/api/models').catch(() => null),
+    api('GET', '/api/egress').catch(() => null),
   ]);
+  let eg = eg0;
   state.update = upd;
   renderSidebar();
 
@@ -1355,6 +1357,35 @@ async function settingsModal(section) {
         <button class="btn danger" id="upd-rollback" ${u.canRollback ? '' : 'disabled'}>Volver a la versión anterior</button>
       </div>
       ${u.underSystemd ? '' : '<p class="muted" style="font-size:13px">No se ejecuta bajo systemd: tras actualizar tendrás que reiniciar el proceso a mano.</p>'}`;
+  };
+
+  const egressBlock = () => {
+    if (!eg) return '<p class="muted" style="margin:0">No se pudo consultar el estado.</p>';
+    const ipTxt = (ip) => (ip ? ` · IP ${esc(ip)}` : '');
+    if (!eg.helper) return `
+      <p style="margin-top:0">Si el proveedor de modelos gratuitos bloquea la IP de tu VPS, puedes sacar <strong>solo el tráfico de OpenCode</strong> por tu servidor WireGuard de casa. Estado actual: salida directa desde el VPS${ipTxt(eg.ip)}.</p>
+      <p style="margin-bottom:6px">Para gestionarlo desde aquí hay que instalar un pequeño ayudante en el VPS (una sola vez, por SSH):</p>
+      <pre class="code" style="margin-bottom:10px">sudo /opt/opencode-cloud/deploy/egress.sh setup</pre>
+      <button class="btn" id="eg-recheck">Ya lo he instalado, comprobar</button>`;
+    const problem = eg.active && /no consigue|no hay handshake/.test(eg.message || '');
+    const state1 = eg.active
+      ? (problem ? '<span style="color:var(--warn)">Túnel activo con problemas</span>' : `<span style="color:var(--ok)">Activo</span>: OpenCode sale por tu casa${ipTxt(eg.tunnel ? eg.ip : eg.tunnelIp)}`)
+      : (eg.configured ? 'Configurado pero <strong>desactivado</strong>: sale directo desde el VPS' : 'Sin configurar: sale directo desde el VPS')
+        + ipTxt(eg.ip);
+    return `
+      <p style="margin-top:0">${state1}</p>
+      ${eg.active && eg.directIp ? `<p class="muted" style="margin-top:-6px;font-size:13px">IP del VPS: ${esc(eg.directIp)}</p>` : ''}
+      ${problem ? `<div class="banner err" style="margin-bottom:10px">${esc(eg.message)}</div>` : ''}
+      ${eg.configured ? `<div class="row wrap" style="margin-bottom:12px">
+        ${eg.active ? '<button class="btn" id="eg-off">Desactivar</button>' : '<button class="btn primary" id="eg-on">Activar</button>'}
+        <button class="btn danger" id="eg-remove">Quitar configuración</button></div>` : ''}
+      <label for="eg-conf" class="muted" style="font-size:13.5px;display:block;margin-bottom:6px">${eg.configured ? 'Sustituir la configuración' : 'Configuración del cliente WireGuard'} (el contenido del archivo <code>.conf</code>)</label>
+      <textarea id="eg-conf" rows="6" class="mono" style="font-size:13px" placeholder="[Interface]&#10;PrivateKey = …&#10;Address = 10.8.0.2/32&#10;&#10;[Peer]&#10;PublicKey = …&#10;Endpoint = tucasa.ejemplo.org:51820&#10;AllowedIPs = 0.0.0.0/0" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"></textarea>
+      <div class="row wrap" style="margin-top:8px">
+        <label class="btn" for="eg-file" style="cursor:pointer">Cargar archivo…</label><input id="eg-file" type="file" style="display:none">
+        <button class="btn primary grow" id="eg-save">Guardar y activar</button>
+      </div>
+      <p class="muted" style="font-size:12.5px;margin:8px 0 0">La clave privada se guarda solo en el VPS (<code>/etc/wireguard</code>, solo root) y no vuelve a mostrarse. Tu servidor de casa debe permitir <code>0.0.0.0/0</code>, reenviar paquetes y hacer NAT.</p>`;
   };
 
   m.body.innerHTML = `
@@ -1395,6 +1426,9 @@ async function settingsModal(section) {
     <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button><button class="btn" id="oc-upgrade">Actualizar OpenCode</button><button class="btn ghost" id="oc-logs">Ver registro</button></div>
     <div id="oc-logbox"></div>
 
+    <h3 id="sec-egress">Salida a internet (WireGuard)</h3>
+    <div id="eg-block">${egressBlock()}</div>
+
     <h3 id="sec-update">Actualizaciones de esta aplicación</h3>
     <div id="upd-block">${updateBlock()}</div>
 
@@ -1420,6 +1454,42 @@ async function settingsModal(section) {
     });
   };
   rebind();
+
+  const egRefresh = async () => { eg = await api('GET', '/api/egress?force=1').catch(() => eg); $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); };
+  const egAfter = async (r, okMsg) => {
+    eg = { ...eg, ...r };
+    $('#eg-block', m.el).innerHTML = egressBlock(); egBind();
+    if (!r.ok) { toast(r.message || 'No se pudo aplicar', 'err'); return; }
+    toast(r.message || okMsg);
+    if (await confirmInterrupt('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?')) {
+      await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); await loadModels(); renderModels();
+    }
+    egRefresh();
+  };
+  const egBind = () => {
+    click('#eg-recheck', async (b) => { await busyBtn(b, 'Comprobando…', egRefresh); if (!eg?.helper) toast('Todavía no se detecta el ayudante', 'err'); });
+    q('#eg-file')?.addEventListener('change', async (e) => {
+      const f = e.target.files?.[0]; if (!f) return;
+      if (f.size > 8192) { toast('Ese archivo es demasiado grande para ser un .conf de WireGuard', 'err'); return; }
+      q('#eg-conf').value = await f.text(); e.target.value = '';
+    });
+    click('#eg-save', async (b) => {
+      const conf = q('#eg-conf').value;
+      if (!conf.trim()) { toast('Pega el contenido del .conf o carga el archivo', 'err'); return; }
+      const r = await busyBtn(b, 'Aplicando…', () => api('POST', '/api/egress/config', { conf }));
+      q('#eg-conf').value = '';
+      await egAfter(r, 'Túnel activado');
+    });
+    click('#eg-on', async (b) => egAfter(await busyBtn(b, 'Activando…', () => api('POST', '/api/egress/action', { action: 'on' })), 'Túnel activado'));
+    click('#eg-off', async (b) => { if (!(await confirmInterrupt('Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
+      const r = await busyBtn(b, 'Desactivando…', () => api('POST', '/api/egress/action', { action: 'off' }));
+      eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message);
+      await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); egRefresh(); });
+    click('#eg-remove', async (b) => { if (!confirm('¿Quitar la configuración de WireGuard del VPS?')) return;
+      const r = await busyBtn(b, 'Quitando…', () => api('POST', '/api/egress/action', { action: 'remove' }));
+      eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message); egRefresh(); });
+  };
+  egBind();
 
   click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.close(); settingsModal(); });
   click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.close(); settingsModal(); });
@@ -1456,7 +1526,7 @@ async function settingsModal(section) {
   click('#app-install', async () => { await installApp(); $('#app-block', m.el).innerHTML = appBlock(); });
   click('#pw-save', async (b) => { await busyBtn(b, 'Guardando…', () => api('PUT', '/api/password', { current: q('#pw-cur').value, next: q('#pw-new').value })); toast('Contraseña cambiada'); q('#pw-cur').value = ''; q('#pw-new').value = ''; });
 
-  if (section === 'update') setTimeout(() => q('#sec-update')?.scrollIntoView({ behavior: 'smooth' }), 50);
+  if (section === 'update' || section === 'egress') setTimeout(() => q(`#sec-${section}`)?.scrollIntoView({ behavior: 'smooth' }), 50);
 }
 
 function afterRestart(result, message, modal) {

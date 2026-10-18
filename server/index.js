@@ -135,6 +135,12 @@ router.get('/system', wrap(async (req, res) => res.json(await sysmon.snapshot(re
 
 // --- Salida a internet (túnel WireGuard opcional) ---
 router.get('/egress', wrap(async (req, res) => res.json(await egress.status({ force: req.query.force === '1' }))));
+router.post('/egress/config', wrap(async (req, res) => res.json(await egress.request('apply', req.body?.conf))));
+router.post('/egress/action', wrap(async (req, res) => {
+  const a = String(req.body?.action || '');
+  if (!['on', 'off', 'remove'].includes(a)) return res.status(400).json({ error: 'Acción no válida' });
+  res.json(await egress.request(a));
+}));
 
 // --- Ajustes ---
 const publicSettings = () => {
