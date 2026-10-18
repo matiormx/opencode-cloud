@@ -230,6 +230,7 @@ router.delete(
     const p = getProject(req);
     saveProjects(loadProjects().filter((x) => x.id !== p.id));
     queue.dropProject(p.id);
+    store.updateSettings({ pinnedSessions: (store.getSettings().pinnedSessions || []).filter((k) => !k.startsWith(`${p.id}:`)) });
     if (req.query.files === '1') {
       // Defensa: solo se borra si la ruta está estrictamente dentro de projectsDir
       const rel = path.relative(config.projectsDir, p.path);
@@ -331,12 +332,62 @@ router.get(
 router.post('/projects/:id/sessions', ocRoute((dir, req) => oc.json('POST', '/session', { directory: dir, body: { title: req.body?.title || undefined } })));
 router.get('/projects/:id/sessions/:sid/messages', ocRoute((dir, req) => oc.json('GET', `/session/${sid(req)}/message`, { directory: dir, query: { limit: 300 } })));
 router.get('/projects/:id/sessions/:sid/diff', ocRoute((dir, req) => oc.json('GET', `/session/${sid(req)}/diff`, { directory: dir })));
-router.patch('/projects/:id/sessions/:sid', ocRoute((dir, req) => oc.json('PATCH', `/session/${sid(req)}`, { directory: dir, body: { title: String(req.body?.title || '').slice(0, 120) } })));
+router.patch(
+  '/projects/:id/sessions/:sid',
+  wrap(async (req, res) => {
+    const p = getProject(req);
+    const title = String(req.body?.title || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (!title) throw fail('El título no puede estar vacío');
+    res.json(await oc.json('PATCH', `/session/${sid(req)}`, { directory: p.path, body: { title } }));
+  }),
+);
+
+// --- Conversaciones destacadas y recientes (de todos los proyectos) ---
+const pinKey = (projectId, sessionId) => `${projectId}:${sessionId}`;
+router.get(
+  '/conversations/overview',
+  wrap(async (req, res) => {
+    const pinned = new Set(store.getSettings().pinnedSessions || []);
+    const projects = loadProjects();
+    const lists = await Promise.all(
+      projects.map(async (pr) => {
+        try {
+          const list = await oc.json('GET', '/session', { directory: withPath(pr).path });
+          return (Array.isArray(list) ? list : []).filter((s) => !s.parentID).map((s) => ({
+            projectId: pr.id, projectName: pr.name, id: s.id, title: s.title || '', updated: s.time?.updated || s.time?.created || 0,
+          }));
+        } catch {
+          return [];
+        }
+      }),
+    );
+    const all = lists.flat().sort((a, b) => b.updated - a.updated);
+    const mark = (x) => ({ ...x, pinned: pinned.has(pinKey(x.projectId, x.id)) });
+    res.json({
+      pinned: all.filter((x) => pinned.has(pinKey(x.projectId, x.id))).map(mark),
+      recent: all.filter((x) => !pinned.has(pinKey(x.projectId, x.id))).slice(0, 5).map(mark),
+    });
+  }),
+);
+router.put(
+  '/conversations/pin',
+  wrap(async (req, res) => {
+    const { projectId, sessionId, pinned } = req.body || {};
+    if (!loadProjects().some((x) => x.id === projectId)) throw fail('Proyecto no encontrado', 404);
+    if (typeof sessionId !== 'string' || !SID.test(sessionId)) throw fail('Conversación no válida');
+    const set = new Set(store.getSettings().pinnedSessions || []);
+    if (pinned) set.add(pinKey(projectId, sessionId));
+    else set.delete(pinKey(projectId, sessionId));
+    store.updateSettings({ pinnedSessions: [...set].slice(-200) });
+    res.json({ ok: true });
+  }),
+);
 router.delete(
   '/projects/:id/sessions/:sid',
   wrap(async (req, res) => {
     const p = getProject(req);
     queue.clear(p.id, sid(req));
+    store.updateSettings({ pinnedSessions: (store.getSettings().pinnedSessions || []).filter((k) => k !== pinKey(p.id, sid(req))) });
     res.json(await oc.json('DELETE', `/session/${sid(req)}`, { directory: p.path }));
   }),
 );

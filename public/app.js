@@ -82,6 +82,7 @@ const state = {
   busy: false,
   busyGrace: 0,
   queue: { items: [], paused: false },
+  featured: { pinned: [], recent: [] },
   models: null,
   model: store.get('model'),
   // En pantallas pequeñas Git es una hoja que empieza cerrada; en ≥1200px se recuerda la preferencia
@@ -200,7 +201,7 @@ async function mountApp() {
 
   bindShell();
   updateOnlineBanner();
-  await Promise.all([loadProjects(), loadModels(), loadUpdate(false)]);
+  await Promise.all([loadProjects(), loadModels(), loadUpdate(false), loadFeatured()]);
   renderAll();
   const last = store.get('project');
   const target = state.projects.find((p) => p.id === last) || state.projects[0];
@@ -245,6 +246,70 @@ function closePanels() {
 }
 
 /* ============================== Sidebar ============================== */
+const isPinned = (projectId, sessionId) => (state.featured.pinned || []).some((x) => x.projectId === projectId && x.id === sessionId);
+
+function featuredRow(c) {
+  const active = c.projectId === state.project?.id && c.id === state.sessionId;
+  return `<div class="sess feat ${active ? 'active' : ''}" data-act="open-conv" data-pid="${esc(c.projectId)}" data-id="${esc(c.id)}">
+      <span class="feat-text"><span class="name">${esc(c.title || 'Sin título')}</span><span class="feat-proj">${esc(c.projectName)} · ${esc(fmtDate(c.updated))}</span></span>
+      <button class="icon-btn star ${c.pinned ? 'on' : ''}" data-act="toggle-pin" data-pid="${esc(c.projectId)}" data-id="${esc(c.id)}" aria-pressed="${c.pinned ? 'true' : 'false'}" aria-label="${c.pinned ? 'Quitar de destacadas' : 'Marcar como destacada'}" style="width:32px;height:32px">${ico(I.star, `width="15" height="15" ${c.pinned ? 'style="fill:currentColor"' : ''}`)}</button>
+      <button class="icon-btn del" data-act="session-menu" data-pid="${esc(c.projectId)}" data-id="${esc(c.id)}" aria-label="Opciones de la conversación" style="width:28px;height:28px">${ico(I.more, 'width="15" height="15"')}</button>
+    </div>`;
+}
+
+function featuredHtml() {
+  const { pinned = [], recent = [] } = state.featured || {};
+  let html = '';
+  if (pinned.length) html += `<div class="side-title">★ Destacadas</div>${pinned.map(featuredRow).join('')}`;
+  if (recent.length) html += `<div class="side-title">Recientes</div>${recent.map(featuredRow).join('')}`;
+  return html;
+}
+
+async function loadFeatured() {
+  try {
+    state.featured = await api('GET', '/api/conversations/overview');
+  } catch { /* se mantiene la lista anterior */ }
+  renderSidebar();
+}
+
+function sessionMenuModal(projectId, sessionId) {
+  const proj = state.projects.find((x) => x.id === projectId);
+  const known = [...(state.featured.pinned || []), ...(state.featured.recent || [])].find((x) => x.projectId === projectId && x.id === sessionId)
+    || (projectId === state.project?.id ? state.sessions.find((x) => x.id === sessionId) : null);
+  if (!proj || !known) return;
+  const title = known.title || '';
+  let pinned = isPinned(projectId, sessionId);
+  const m = openModal('Conversación', `
+    <div class="field"><label for="sm-title">Título</label><input id="sm-title" type="text" value="${esc(title)}" maxlength="120" autocomplete="off" data-1p-ignore="true" data-lpignore="true"></div>
+    <button class="btn primary" id="sm-save">Guardar título</button>
+    <hr class="sep">
+    <div class="row wrap"><button class="btn grow" id="sm-pin"></button><button class="btn danger grow" id="sm-del">Eliminar conversación</button></div>
+    <p class="muted" style="margin:10px 0 0">Proyecto: ${esc(proj.name)}</p>`);
+  const paintPin = () => { m.el.querySelector('#sm-pin').innerHTML = `${ico(I.star, `width="16" height="16" ${pinned ? 'style="fill:currentColor"' : ''}`)} ${pinned ? 'Quitar de destacadas' : 'Marcar como destacada'}`; };
+  paintPin();
+  const refreshAll = async () => { await Promise.all([projectId === state.project?.id ? loadSessions() : null, loadFeatured()]); };
+  const save = async (b) => {
+    const v = m.el.querySelector('#sm-title').value.trim();
+    if (!v) { toast('El título no puede estar vacío', 'err'); return; }
+    await busyBtn(b, 'Guardando…', () => api('PATCH', `/api/projects/${projectId}/sessions/${sessionId}`, { title: v }));
+    toast('Título cambiado'); m.close(); await refreshAll();
+  };
+  m.el.querySelector('#sm-save').addEventListener('click', (e) => save(e.currentTarget).catch((err) => toast(err.message, 'err')));
+  m.el.querySelector('#sm-title').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); m.el.querySelector('#sm-save').click(); } });
+  m.el.querySelector('#sm-pin').addEventListener('click', async () => {
+    try { pinned = !pinned; await api('PUT', '/api/conversations/pin', { projectId, sessionId, pinned }); paintPin(); await refreshAll(); } catch (err) { pinned = !pinned; toast(err.message, 'err'); }
+  });
+  m.el.querySelector('#sm-del').addEventListener('click', async () => {
+    if (!confirm('¿Eliminar esta conversación?')) return;
+    try {
+      await api('DELETE', `/api/projects/${projectId}/sessions/${sessionId}`);
+      if (projectId === state.project?.id && state.sessionId === sessionId) { state.sessionId = null; state.messages = []; renderMessages(); }
+      m.close(); await refreshAll();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  setTimeout(() => { const i = m.el.querySelector('#sm-title'); i.focus(); i.select(); }, 60);
+}
+
 function renderSidebar() {
   const upd = state.update;
   const items = state.projects.map((p) => {
@@ -255,7 +320,8 @@ function renderSidebar() {
           ${state.sessions.map((s) => `
             <div class="sess ${s.id === state.sessionId ? 'active' : ''}" data-act="select-session" data-id="${esc(s.id)}">
               <span class="name">${esc(s.title || 'Sin título')}</span>
-              <button class="icon-btn del" data-act="del-session" data-id="${esc(s.id)}" title="Eliminar conversación" style="width:24px;height:24px">${ico(I.x, 'width="13" height="13"')}</button>
+              ${isPinned(state.project.id, s.id) ? `<span class="pin-mark" title="Destacada">${ico(I.star, 'width="13" height="13" style="fill:currentColor"')}</span>` : ''}
+              <button class="icon-btn del" data-act="session-menu" data-pid="${esc(state.project.id)}" data-id="${esc(s.id)}" aria-label="Opciones de la conversación" style="width:24px;height:24px">${ico(I.more, 'width="15" height="15"')}</button>
             </div>`).join('')}
         </div>` : '';
     return `<div class="proj ${active ? 'active' : ''}" data-act="select-project" data-id="${esc(p.id)}">
@@ -268,6 +334,7 @@ function renderSidebar() {
     <div class="brand"><span class="logo">${ico(I.code, 'stroke="#fff" stroke-width="2.6"')}</span><span class="grow">OpenCode Cloud</span><button class="icon-btn menu-btn" data-act="close-panels" aria-label="Cerrar menú">${ico(I.x)}</button></div>
     <div class="side-actions"><button class="btn primary" data-act="new-project">${ico(I.plus, 'width="16" height="16"')} Nuevo proyecto</button></div>
     <div class="side-scroll">
+      ${featuredHtml()}
       <div class="side-title">Proyectos</div>
       ${items || '<p class="muted" style="padding:8px">Aún no tienes proyectos. Crea uno o clona un repositorio de GitHub.</p>'}
     </div>
@@ -342,6 +409,7 @@ async function loadSessions() {
     toast(`No se pudieron cargar las conversaciones: ${e.message}`, 'err');
   }
   renderSidebar();
+  loadFeatured();
 }
 
 async function selectSession(id, keepNav = false) {
@@ -1141,6 +1209,18 @@ function bindShell() {
         case 'new-project': state.navOpen = false; applyPanelState(); newProjectModal(); break;
         case 'new-session': await newSession(); break;
         case 'select-session': await selectSession(t.dataset.id); break;
+        case 'session-menu': e.stopPropagation(); sessionMenuModal(t.dataset.pid, t.dataset.id); break;
+        case 'toggle-pin': {
+          e.stopPropagation();
+          const was = t.getAttribute('aria-pressed') === 'true';
+          await api('PUT', '/api/conversations/pin', { projectId: t.dataset.pid, sessionId: t.dataset.id, pinned: !was });
+          await loadFeatured();
+          break;
+        }
+        case 'open-conv':
+          if (state.project?.id !== t.dataset.pid) await selectProject(t.dataset.pid);
+          await selectSession(t.dataset.id);
+          break;
         case 'del-session':
           e.stopPropagation();
           if (!confirm('¿Eliminar esta conversación?')) break;
