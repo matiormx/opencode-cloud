@@ -345,3 +345,5 @@ input.secret { -webkit-text-security: disc; text-security: disc; font-family: ui
 .mp-star { flex: none; width: var(--tap); background: none; border: 0; color: var(--muted); cursor: pointer; display: grid; place-items: center; border-radius: 10px; }
 .mp-star.on { color: #d99a1c; }
 .mp-star:hover { background: var(--card); }
+
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }

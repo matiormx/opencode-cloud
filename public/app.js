@@ -526,6 +526,27 @@ function renderPerms() {
 }
 
 /* ============================== Composer ============================== */
+// Dónde crear la API key de cada proveedor (id de OpenCode → enlace y nota)
+const PROVIDER_HELP = {
+  nvidia: { url: 'https://build.nvidia.com/settings/api-keys', note: 'Usa la clave de build.nvidia.com (botón «Get API Key» de cualquier modelo). Las claves de NGC solo valen si incluyen «Public API Endpoints»; si no, da error 403.' },
+  openrouter: { url: 'https://openrouter.ai/keys', note: 'Una sola clave para muchos modelos; algunos son gratuitos.' },
+  anthropic: { url: 'https://console.anthropic.com/settings/keys' },
+  openai: { url: 'https://platform.openai.com/api-keys' },
+  google: { url: 'https://aistudio.google.com/apikey', note: 'Clave de Google AI Studio (Gemini).' },
+  deepseek: { url: 'https://platform.deepseek.com/api_keys' },
+  groq: { url: 'https://console.groq.com/keys' },
+  mistral: { url: 'https://console.mistral.ai/api-keys' },
+  xai: { url: 'https://console.x.ai' },
+  togetherai: { url: 'https://api.together.ai/settings/api-keys' },
+  'fireworks-ai': { url: 'https://fireworks.ai/account/api-keys' },
+  cerebras: { url: 'https://cloud.cerebras.ai' },
+};
+const providerHelpHtml = (id) => {
+  const h = PROVIDER_HELP[id];
+  if (!h) return '';
+  return `<a class="btn" href="${esc(h.url)}" target="_blank" rel="noopener noreferrer">Conseguir la clave ↗</a>${h.note ? `<p class="muted" style="margin:6px 0 0">${esc(h.note)}</p>` : ''}`;
+};
+
 const modelKey = (p, m) => `${p.id}::${m.id}`;
 
 function allModels() {
@@ -950,6 +971,7 @@ async function settingsModal(section) {
     <p class="muted" style="margin-top:0">Añade una API key para que aparezcan sus modelos en el selector.</p>
     ${(models?.stored || []).length ? `<div id="prov-list" class="stack" style="margin-bottom:10px">${models.stored.map((s) => `<div class="row" style="justify-content:space-between"><div class="grow"><strong>${esc(s.name)}</strong> <span class="muted mono">${esc(s.hint || (s.type === 'oauth' ? 'sesión' : ''))}</span></div><button class="btn danger" data-prov-del="${esc(s.id)}" data-prov-name="${esc(s.name)}">Quitar</button></div>`).join('')}</div>` : ''}
     <div class="row wrap"><select id="prov-id" class="grow">${providerOptions}</select><input id="prov-key" name="provider-key-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="API key"><button class="btn" id="prov-save">Guardar</button></div>
+    <div id="prov-help" style="margin-top:8px"></div>
 
     <h3>OpenCode</h3>
     <p style="margin-top:0">Estado: ${oc.healthy ? '<span style="color:var(--ok)">en marcha</span>' : '<span style="color:var(--err)">no responde</span>'}${oc.version ? ` · versión ${esc(oc.version)}` : ''}</p>
@@ -992,6 +1014,9 @@ async function settingsModal(section) {
       toast('Clave eliminada'); await loadModels(); renderModels(); m.close(); settingsModal();
     } catch (err) { toast(err.message, 'err'); }
   }));
+  const showProvHelp = () => { q('#prov-help').innerHTML = providerHelpHtml(q('#prov-id').value); };
+  q('#prov-id').addEventListener('change', showProvHelp);
+  showProvHelp();
   click('#prov-save', async (b) => {
     await busyBtn(b, 'Guardando…', () => api('PUT', `/api/providers/${q('#prov-id').value}/key`, { key: q('#prov-key').value }));
     q('#prov-key').value = '';
