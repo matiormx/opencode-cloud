@@ -574,20 +574,23 @@ const providerHelpHtml = (id) => {
   return `<a class="btn" href="${esc(h.url)}" target="_blank" rel="noopener noreferrer">Conseguir la clave ↗</a>${h.note ? `<p class="muted" style="margin:6px 0 0">${esc(h.note)}</p>` : ''}`;
 };
 
+// Proveedores visibles en el selector (los ocultos se gestionan en Ajustes)
+const visibleProviders = () => (state.models?.providers || []).filter((p) => !(state.models?.hidden || []).includes(p.id));
+
 const modelKey = (p, m) => `${p.id}::${m.id}`;
 
 function allModels() {
   const out = [];
-  for (const p of state.models?.providers || []) for (const m of p.models) out.push({ key: modelKey(p, m), provider: p.name, name: m.name });
+  for (const p of visibleProviders()) for (const m of p.models) out.push({ key: modelKey(p, m), provider: p.name, name: m.name });
   return out;
 }
 
 function renderModels() {
   const btn = $('#model-btn');
   if (!btn) return;
-  const providers = state.models?.providers || [];
+  const providers = visibleProviders();
   if (!providers.length) {
-    btn.textContent = 'Sin modelos: configura una API key';
+    btn.textContent = (state.models?.providers || []).length ? 'Todos los modelos ocultos (Ajustes)' : 'Sin modelos: configura una API key';
     btn.dataset.empty = '1';
     return;
   }
@@ -606,8 +609,8 @@ function renderModels() {
 }
 
 function modelPicker() {
-  const providers = state.models?.providers || [];
-  if (!providers.length) return;
+  const providers = visibleProviders();
+  if (!providers.length) { toast('No hay modelos visibles. Muéstralos en Ajustes → Proveedores de IA.'); return; }
   const m = openModal('Elegir modelo', `
     <input id="mp-q" type="search" placeholder="Buscar modelo…" autocomplete="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true">
     <p class="muted" style="margin:8px 0 0">Marca con ★ los que más usas y saldrán arriba.</p>
@@ -1014,8 +1017,19 @@ async function settingsModal(section) {
     <div class="row wrap"><input id="g-name" type="text" class="grow" value="${esc(settings.gitName)}" placeholder="Nombre"><input id="g-email" type="email" class="grow" value="${esc(settings.gitEmail)}" placeholder="correo"><button class="btn" id="g-save">Guardar</button></div>
 
     <h3>Proveedores de IA</h3>
-    <p class="muted" style="margin-top:0">Añade una API key para que aparezcan sus modelos en el selector.</p>
-    ${(models?.stored || []).length ? `<div id="prov-list" class="stack" style="margin-bottom:10px">${models.stored.map((s) => `<div class="row" style="justify-content:space-between"><div class="grow"><strong>${esc(s.name)}</strong> <span class="muted mono">${esc(s.hint || (s.type === 'oauth' ? 'sesión' : ''))}</span></div><button class="btn danger" data-prov-del="${esc(s.id)}" data-prov-name="${esc(s.name)}">Quitar</button></div>`).join('')}</div>` : ''}
+    <p class="muted" style="margin-top:0">Añade una API key para que aparezcan sus modelos en el selector. Con «Visible» desactivado, un proveedor sigue conectado pero sus modelos no salen en la lista.</p>
+    ${(() => {
+      const stored = new Map((models?.stored || []).map((x) => [x.id, x]));
+      const rows = new Map();
+      for (const p of models?.providers || []) rows.set(p.id, { id: p.id, name: p.name, count: p.models.length });
+      for (const x of models?.stored || []) if (!rows.has(x.id)) rows.set(x.id, { id: x.id, name: x.name, count: 0 });
+      if (!rows.size) return '';
+      const hidden = models?.hidden || [];
+      return `<div id="prov-list" class="stack" style="margin-bottom:10px">${[...rows.values()].sort((a, b) => a.name.localeCompare(b.name)).map((r) => {
+        const st = stored.get(r.id);
+        return `<div class="prov-row"><div class="grow"><strong>${esc(r.name)}</strong> <span class="muted mono">${st ? esc(st.hint || (st.type === 'oauth' ? 'sesión' : 'clave')) : 'sin clave propia'}</span><div class="muted" style="font-size:12px">${r.count} modelos</div></div><label class="switch" title="Mostrar sus modelos en el selector"><input type="checkbox" data-prov-vis="${esc(r.id)}" ${hidden.includes(r.id) ? '' : 'checked'}><span>Visible</span></label>${st ? `<button class="btn danger" data-prov-del="${esc(r.id)}" data-prov-name="${esc(r.name)}">Quitar</button>` : ''}</div>`;
+      }).join('')}</div>`;
+    })()}
     <div class="row wrap"><select id="prov-id" class="grow">${providerOptions}</select><input id="prov-key" name="provider-key-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="API key"><button class="btn" id="prov-save">Guardar</button></div>
     <div id="prov-help" style="margin-top:8px"></div>
 
@@ -1053,6 +1067,14 @@ async function settingsModal(section) {
   click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.close(); settingsModal(); });
   click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.close(); settingsModal(); });
   click('#g-save', async () => { await api('PUT', '/api/settings', { gitName: q('#g-name').value, gitEmail: q('#g-email').value }); toast('Identidad guardada (se aplica a nuevos commits)'); });
+  m.el.querySelectorAll('[data-prov-vis]').forEach((cb) => cb.addEventListener('change', async () => {
+    const prev = state.models.hidden || [];
+    const id = cb.dataset.provVis;
+    const next = cb.checked ? prev.filter((x) => x !== id) : [...new Set([...prev, id])];
+    state.models.hidden = next;
+    renderModels();
+    try { await api('PUT', '/api/models/hidden', { hidden: next }); } catch (err) { state.models.hidden = prev; cb.checked = !cb.checked; renderModels(); toast(err.message, 'err'); }
+  }));
   m.el.querySelectorAll('[data-prov-del]').forEach((b) => b.addEventListener('click', async () => {
     if (!confirm(`¿Quitar la clave de ${b.dataset.provName}? Sus modelos dejarán de aparecer.`)) return;
     try {

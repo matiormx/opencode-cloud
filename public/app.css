@@ -355,3 +355,9 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .queue-item { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .queue-n { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; background: var(--card); border: 1px solid var(--line); color: var(--muted); }
 .queue-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Lista de proveedores en Ajustes */
+.prov-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.prov-row:last-child { border-bottom: 0; }
+.switch { display: inline-flex; align-items: center; gap: 6px; min-height: var(--tap); font-size: 13px; cursor: pointer; }
+.switch input { width: 18px; height: 18px; }

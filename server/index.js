@@ -435,7 +435,7 @@ router.get(
     const all = (prov?.all || []).map((p) => ({ id: p.id, name: p.name || p.id }));
     const names = new Map(all.map((p) => [p.id, p.name]));
     const stored = (await readStoredAuth()).map((a) => ({ ...a, name: names.get(a.id) || a.id }));
-    res.json({ providers, defaults: cfg.default || {}, all, stored, favorites: store.getSettings().favoriteModels || [], connected: prov?.connected || providers.map((p) => p.id) });
+    res.json({ providers, defaults: cfg.default || {}, all, stored, favorites: store.getSettings().favoriteModels || [], hidden: store.getSettings().hiddenProviders || [], connected: prov?.connected || providers.map((p) => p.id) });
   }),
 );
 
@@ -461,6 +461,17 @@ router.delete(
     await oc.json('DELETE', `/auth/${req.params.id}`, { directory: config.projectsDir });
     await oc.json('POST', '/instance/dispose', { directory: config.projectsDir }).catch(() => {});
     res.json({ ok: true });
+  }),
+);
+
+router.put(
+  '/models/hidden',
+  wrap(async (req, res) => {
+    const list = Array.isArray(req.body?.hidden) ? req.body.hidden : null;
+    if (!list) throw fail('Lista no válida');
+    const clean = [...new Set(list.filter((v) => typeof v === 'string' && /^[A-Za-z0-9._-]{1,80}$/.test(v)))].slice(0, 200);
+    store.updateSettings({ hiddenProviders: clean });
+    res.json({ hidden: clean });
   }),
 );
 

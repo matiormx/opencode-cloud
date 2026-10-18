@@ -22,7 +22,7 @@ export function save(name, data) {
   fs.renameSync(tmp, target);
 }
 
-const DEFAULT_SETTINGS = { githubToken: '', gitName: 'OpenCode Cloud', gitEmail: 'opencode@localhost', favoriteModels: [] };
+const DEFAULT_SETTINGS = { githubToken: '', gitName: 'OpenCode Cloud', gitEmail: 'opencode@localhost', favoriteModels: [], hiddenProviders: [] };
 
 export function getSettings() {
   return { ...DEFAULT_SETTINGS, ...load('settings', {}) };
