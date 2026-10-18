@@ -10,6 +10,7 @@ import * as git from './git.js';
 import * as gh from './github.js';
 import * as oc from './opencode.js';
 import * as queue from './queue.js';
+import * as sysmon from './sysmon.js';
 import * as store from './store.js';
 import * as updater from './updater.js';
 
@@ -81,6 +82,27 @@ app.post('/api/logout', (req, res) => {
 
 // ---------- Protegido ----------
 app.use('/api', auth.requireAuth, router);
+
+// --- Trabajo en curso (conversaciones ocupadas en cualquier proyecto) ---
+router.get(
+  '/activity',
+  wrap(async (req, res) => {
+    const out = [];
+    await Promise.all(
+      loadProjects().map(async (pr) => {
+        try {
+          const dir = withPath(pr).path;
+          const st = await oc.json('GET', '/session/status', { directory: dir });
+          for (const [id, v] of Object.entries(st || {})) if (v && v.type !== 'idle') out.push({ projectId: pr.id, projectName: pr.name, sessionId: id });
+        } catch { /* OpenCode no responde: no hay nada que interrumpir */ }
+      }),
+    );
+    res.json({ busy: out, queued: queue.countAll() });
+  }),
+);
+
+// --- Recursos del servidor ---
+router.get('/system', wrap(async (req, res) => res.json(await sysmon.snapshot(req.query.points))));
 
 // --- Ajustes ---
 const publicSettings = () => {
@@ -585,6 +607,7 @@ app.use((err, req, res, next) => {
 oc.start();
 updater.startPeriodicCheck();
 queue.start();
+sysmon.start();
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`opencode-cloud escuchando en http://${config.host}:${config.port}  (datos: ${config.dataDir})`);

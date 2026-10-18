@@ -29,9 +29,13 @@
   --tap: 44px;
   --sidebar-w: 288px;
   --git-w: 380px;
+  --s1: #2a78d6; /* gráficos: serie 1 (validada) */
+  --s2: #eb6834; /* gráficos: serie 2 */
 }
 @media (prefers-color-scheme: dark) {
   :root {
+    --s1: #3987e5;
+    --s2: #d95926;
     --bg: #262624;
     --panel: #1f1e1d;
     --panel-2: #30302e;
@@ -370,3 +374,31 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .icon-btn.star { color: var(--muted); }
 .icon-btn.star.on { color: #d99a1c; }
 .pin-mark { color: #d99a1c; display: inline-flex; align-items: center; }
+
+/* Recursos del VPS */
+.sysmon { width: 100%; display: flex; gap: 12px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: inherit; cursor: pointer; text-align: left; min-height: var(--tap); }
+.sysmon:active { background: var(--panel-2); }
+.sm-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sm-top { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.sm-label { font-size: 12px; color: var(--muted); letter-spacing: .04em; }
+.sm-val { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sm-high { font-size: 11px; font-weight: 600; color: var(--warn); }
+.spark { width: 100%; height: 28px; display: block; }
+.ch-block { margin: 0 0 14px; }
+.ch-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.ch-head h3 { margin: 12px 0 4px; }
+.ch-now { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ch-legend { display: inline-flex; gap: 14px; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.ch-legend i, .ch-tip-row i { display: inline-block; width: 14px; height: 2px; border-radius: 1px; margin-right: 6px; vertical-align: middle; }
+.ch { position: relative; touch-action: pan-y; }
+.ch svg { display: block; max-width: 100%; }
+.ch-ax { font-size: 10.5px; fill: var(--muted); font-family: var(--sans); }
+.ch-tip { position: absolute; top: 0; z-index: 2; pointer-events: none; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0,0,0,.15); white-space: nowrap; }
+.ch-tip-time { color: var(--muted); font-size: 11.5px; margin-bottom: 2px; }
+.ch-tip-row strong { font-variant-numeric: tabular-nums; margin-right: 6px; }
+.ch-tip-row span { color: var(--muted); }
+table.kv { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.kv th, table.kv td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+table.kv th[scope=row] { font-weight: 500; color: var(--muted); width: 42%; }
+.ch-table { margin: 12px 0; }
+.ch-table summary { cursor: pointer; min-height: 32px; color: var(--muted); font-size: 14px; }

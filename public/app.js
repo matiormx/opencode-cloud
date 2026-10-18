@@ -83,6 +83,7 @@ const state = {
   busyGrace: 0,
   queue: { items: [], paused: false },
   featured: { pinned: [], recent: [] },
+  sys: null,
   models: null,
   model: store.get('model'),
   // En pantallas pequeñas Git es una hoja que empieza cerrada; en ≥1200px se recuerda la preferencia
@@ -201,7 +202,7 @@ async function mountApp() {
 
   bindShell();
   updateOnlineBanner();
-  await Promise.all([loadProjects(), loadModels(), loadUpdate(false), loadFeatured()]);
+  await Promise.all([loadProjects(), loadModels(), loadUpdate(false), loadFeatured(), loadSys()]);
   renderAll();
   const last = store.get('project');
   const target = state.projects.find((p) => p.id === last) || state.projects[0];
@@ -210,6 +211,7 @@ async function mountApp() {
   if (!timersStarted) {
     timersStarted = true;
     setInterval(pollStatus, 2500);
+    setInterval(() => { if (!document.hidden && $('#sysmon-slot')) loadSys(); }, 10_000);
     setInterval(() => { if (state.queue.items.length) loadQueue(); }, 4000);
     setInterval(() => { if ($('#sidebar')) loadUpdate(false); }, 10 * 60_000);
   }
@@ -270,6 +272,150 @@ async function loadFeatured() {
     state.featured = await api('GET', '/api/conversations/overview');
   } catch { /* se mantiene la lista anterior */ }
   renderSidebar();
+}
+
+/* ============================== Recursos del VPS ============================== */
+const fmtBytes = (n) => {
+  if (!Number.isFinite(n)) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
+};
+const fmtRate = (n) => `${fmtBytes(n)}/s`;
+const fmtUptime = (sec) => {
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`;
+};
+const pct = (x) => `${Math.round(x)}%`;
+const HIGH = 85;
+
+function sparkSvg(values, { w = 120, h = 28 } = {}) {
+  if (values.length < 2) return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"></svg>`;
+  const x = (i) => 3 + (i / (values.length - 1)) * (w - 6);
+  const y = (v) => h - 3 - (Math.min(100, Math.max(0, v)) / 100) * (h - 6);
+  const pts = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const last = values.length - 1;
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/><circle cx="${x(last).toFixed(1)}" cy="${y(values[last]).toFixed(1)}" r="3" fill="var(--s1)" stroke="var(--card)" stroke-width="2"/></svg>`;
+}
+
+function sysCardHtml() {
+  const s = state.sys;
+  if (!s || !s.history.length) return `<button class="sysmon" data-act="sysmon" aria-label="Recursos del servidor"><span class="muted" style="font-size:13px">Recursos del servidor…</span></button>`;
+  const cpu = s.now.cpu, mem = s.now.mem.total ? (s.now.mem.used / s.now.mem.total) * 100 : 0;
+  const col = (label, v, key) => `<span class="sm-col"><span class="sm-top"><span class="sm-label">${label}</span><span class="sm-val">${pct(v)}</span>${v >= HIGH ? '<span class="sm-high" title="Uso alto">▲ alto</span>' : ''}</span>${sparkSvg(s.history.map((p) => p[key]))}</span>`;
+  return `<button class="sysmon" data-act="sysmon" aria-label="Ver recursos del servidor en detalle">${col('CPU', cpu, 'cpu')}${col('RAM', mem, 'mem')}</button>`;
+}
+
+async function loadSys(points = 30) {
+  try {
+    state.sys = await api('GET', `/api/system?points=${points}`);
+    const el = $('#sysmon-slot');
+    if (el) el.innerHTML = sysCardHtml();
+  } catch { /* se reintenta en el siguiente ciclo */ }
+}
+
+function lineChart({ id, series, data, yMax, yFmt, valFmt, h = 120 }) {
+  const wrap = document.getElementById(id);
+  if (!wrap) return;
+  const W = Math.max(240, wrap.clientWidth || 320), H = h, L = 48, R = 8, T = 8, B = 20;
+  const n = data.length;
+  const x = (i) => L + (n <= 1 ? 0 : (i / (n - 1)) * (W - L - R));
+  const y = (v) => T + (1 - Math.min(1, Math.max(0, v / yMax))) * (H - T - B);
+  const grid = [0, 0.5, 1].map((f) => `<line x1="${L}" x2="${W - R}" y1="${y(yMax * f).toFixed(1)}" y2="${y(yMax * f).toFixed(1)}" stroke="var(--line)" stroke-width="1"/><text x="${L - 6}" y="${(y(yMax * f) + 4).toFixed(1)}" text-anchor="end" class="ch-ax">${yFmt(yMax * f)}</text>`).join('');
+  const span = n > 1 ? Math.round((data[n - 1].t - data[0].t) / 60000) : 0;
+  const lines = series.map((sr) => `<polyline fill="none" stroke="${sr.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="${data.map((p, i) => `${x(i).toFixed(1)},${y(p[sr.key]).toFixed(1)}`).join(' ')}"/>`).join('');
+  wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(series.map((sr) => sr.label).join(' y '))}, últimos ${span} minutos">${grid}${lines}
+    <text x="${L}" y="${H - 4}" class="ch-ax">hace ${span} min</text><text x="${W - R}" y="${H - 4}" text-anchor="end" class="ch-ax">ahora</text>
+    <line class="ch-cross" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" style="display:none"/>
+    <g class="ch-dots"></g><rect class="ch-hit" x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent"/></svg><div class="ch-tip" role="status" hidden></div>`;
+  const svg = wrap.querySelector('svg'), tip = wrap.querySelector('.ch-tip'), cross = wrap.querySelector('.ch-cross'), dots = wrap.querySelector('.ch-dots'), hit = wrap.querySelector('.ch-hit');
+  const show = (clientX) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((clientX - r.left) / r.width) * W;
+    const i = Math.min(n - 1, Math.max(0, Math.round(((px - L) / (W - L - R)) * (n - 1))));
+    const p = data[i];
+    cross.setAttribute('x1', x(i)); cross.setAttribute('x2', x(i)); cross.style.display = '';
+    dots.innerHTML = series.map((sr) => `<circle cx="${x(i).toFixed(1)}" cy="${y(p[sr.key]).toFixed(1)}" r="4" fill="${sr.color}" stroke="var(--bg)" stroke-width="2"/>`).join('');
+    tip.hidden = false;
+    tip.textContent = '';
+    const head = document.createElement('div');
+    head.className = 'ch-tip-time';
+    head.textContent = new Date(p.t).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    tip.append(head);
+    for (const sr of series) {
+      const row = document.createElement('div');
+      row.className = 'ch-tip-row';
+      const key = document.createElement('i'); key.style.background = sr.color;
+      const val = document.createElement('strong'); val.textContent = valFmt(p[sr.key]);
+      const lab = document.createElement('span'); lab.textContent = sr.label;
+      row.append(key, val, lab);
+      tip.append(row);
+    }
+    const tw = tip.offsetWidth;
+    const left = Math.min(Math.max(4, (x(i) / W) * r.width - tw / 2), r.width - tw - 4);
+    tip.style.left = `${left}px`;
+  };
+  const hide = () => { tip.hidden = true; cross.style.display = 'none'; dots.innerHTML = ''; };
+  hit.addEventListener('pointermove', (e) => show(e.clientX));
+  hit.addEventListener('pointerdown', (e) => show(e.clientX));
+  hit.addEventListener('pointerleave', hide);
+}
+
+function sysModal() {
+  const m = openModal('Recursos del servidor', '<p class="muted">Cargando…</p>', { wide: true });
+  let timer = null;
+  const draw = async () => {
+    let d;
+    try { d = await api('GET', '/api/system?points=360'); } catch (e) { m.body.innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
+    state.sys = d;
+    const el = $('#sysmon-slot'); if (el) el.innerHTML = sysCardHtml();
+    const { now, history } = d;
+    const memPct = now.mem.total ? (now.mem.used / now.mem.total) * 100 : 0;
+    const diskPct = now.disk?.total ? (now.disk.used / now.disk.total) * 100 : null;
+    const maxNet = Math.max(1024, ...history.map((p) => Math.max(p.rx, p.tx)));
+    const niceNet = 2 ** Math.ceil(Math.log2(maxNet));
+    const statRow = (label, value, high) => `<tr><th scope="row">${label}</th><td>${value}${high ? ' <span class="sm-high">▲ alto</span>' : ''}</td></tr>`;
+    const agg = (key, f) => { const v = history.map((p) => p[key]); return v.length ? f(v) : 0; };
+    const avg = (v) => v.reduce((a, b) => a + b, 0) / v.length;
+    const tableRows = [
+      ['CPU', (x) => pct(x), 'cpu'], ['Memoria', (x) => pct(x), 'mem'], ['Red ↓ (recibida)', fmtRate, 'rx'], ['Red ↑ (enviada)', fmtRate, 'tx'],
+    ].map(([lab, f, key]) => `<tr><th scope="row">${lab}</th><td>${f(agg(key, (v) => Math.min(...v)))}</td><td>${f(agg(key, avg))}</td><td>${f(agg(key, (v) => Math.max(...v)))}</td></tr>`).join('');
+    m.body.innerHTML = `
+      <div class="ch-block"><div class="ch-head"><h3>CPU</h3><span class="ch-now">${pct(now.cpu)}${now.cpu >= HIGH ? ' <span class="sm-high">▲ alto</span>' : ''}</span></div><div class="ch" id="ch-cpu"></div></div>
+      <div class="ch-block"><div class="ch-head"><h3>Memoria</h3><span class="ch-now">${pct(memPct)}${memPct >= HIGH ? ' <span class="sm-high">▲ alto</span>' : ''}</span></div><div class="ch" id="ch-mem"></div></div>
+      <div class="ch-block"><div class="ch-head"><h3>Red</h3><span class="ch-legend"><span><i style="background:var(--s1)"></i>Recibida ${fmtRate(now.net?.rx ?? 0)}</span><span><i style="background:var(--s2)"></i>Enviada ${fmtRate(now.net?.tx ?? 0)}</span></span></div><div class="ch" id="ch-net"></div></div>
+      <h3>Ahora</h3>
+      <table class="kv"><tbody>
+        ${statRow('Memoria', `${fmtBytes(now.mem.used)} de ${fmtBytes(now.mem.total)} (${pct(memPct)})`, memPct >= HIGH)}
+        ${now.mem.swapTotal ? statRow('Swap', `${fmtBytes(now.mem.swapUsed)} de ${fmtBytes(now.mem.swapTotal)}`) : ''}
+        ${diskPct !== null ? statRow('Disco', `${fmtBytes(now.disk.used)} de ${fmtBytes(now.disk.total)} (${pct(diskPct)})`, diskPct >= 90) : ''}
+        ${statRow('Carga (1 / 5 / 15 min)', `${now.load.join(' / ')} · ${now.cores} núcleo${now.cores > 1 ? 's' : ''}`, now.load[0] > now.cores * 1.5)}
+        ${statRow('Encendido desde hace', fmtUptime(now.uptime))}
+      </tbody></table>
+      <details class="ch-table"><summary>Ver como tabla (últimos ${Math.max(1, Math.round(history.length * d.intervalMs / 60000))} min)</summary>
+        <table class="kv"><thead><tr><th></th><th>Mín.</th><th>Media</th><th>Máx.</th></tr></thead><tbody>${tableRows}</tbody></table></details>
+      <p class="muted" style="font-size:12px">Una muestra cada ${Math.round(d.intervalMs / 1000)} s; se guarda la última hora (se reinicia al reiniciar el servicio).</p>`;
+    if (history.length >= 2) {
+      lineChart({ id: 'ch-cpu', series: [{ key: 'cpu', label: 'CPU', color: 'var(--s1)' }], data: history, yMax: 100, yFmt: pct, valFmt: pct });
+      lineChart({ id: 'ch-mem', series: [{ key: 'mem', label: 'Memoria', color: 'var(--s1)' }], data: history, yMax: 100, yFmt: pct, valFmt: pct });
+      lineChart({ id: 'ch-net', series: [{ key: 'rx', label: 'Recibida', color: 'var(--s1)' }, { key: 'tx', label: 'Enviada', color: 'var(--s2)' }], data: history, yMax: niceNet, yFmt: (v) => fmtBytes(v).replace('.0 ', ' '), valFmt: fmtRate });
+    } else {
+      for (const id of ['ch-cpu', 'ch-mem', 'ch-net']) { const e = document.getElementById(id); if (e) e.innerHTML = '<p class="muted">Recogiendo datos… vuelve en unos segundos.</p>'; }
+    }
+  };
+  draw();
+  timer = setInterval(() => { if (!document.hidden && document.body.contains(m.el)) draw(); else if (!document.body.contains(m.el)) clearInterval(timer); }, 10_000);
+}
+
+// Antes de reiniciar o actualizar: avisa si OpenCode está trabajando (se interrumpiría esa tarea)
+async function confirmInterrupt(question) {
+  let busy = [];
+  let queued = 0;
+  try { ({ busy, queued } = await api('GET', '/api/activity')); } catch { /* sin datos: se pregunta lo normal */ }
+  if (!busy.length) return confirm(question);
+  const names = [...new Set(busy.map((b) => b.projectName))].join(', ');
+  return confirm(`OpenCode está trabajando ahora mismo (${busy.length} conversación${busy.length > 1 ? 'es' : ''}: ${names}).\n\nSi continúas, esa tarea se interrumpirá y no se reanuda sola${queued ? ' (los mensajes en cola sí se enviarán después)' : ''}.\n\n¿Continuar de todos modos?`);
 }
 
 function sessionMenuModal(projectId, sessionId) {
@@ -339,6 +485,7 @@ function renderSidebar() {
       ${items || '<p class="muted" style="padding:8px">Aún no tienes proyectos. Crea uno o clona un repositorio de GitHub.</p>'}
     </div>
     <div class="side-foot">
+      <div id="sysmon-slot">${sysCardHtml()}</div>
       ${installPromptEvent && !isStandalone() ? `<button class="install-pill" data-act="install-app"><span>${ico(I.down, 'width="16" height="16"')}</span><span><strong>Instalar aplicación</strong><br><span class="muted">Añádela a tu pantalla de inicio</span></span></button>` : ''}
       ${upd?.behind ? `<button class="update-pill" data-act="settings" data-section="update"><span class="dot"></span><span><strong>Actualización disponible</strong><br><span class="muted">${upd.behind} cambio${upd.behind > 1 ? 's' : ''} nuevo${upd.behind > 1 ? 's' : ''} en GitHub</span></span></button>` : ''}
       <div class="row">
@@ -1120,12 +1267,12 @@ async function settingsModal(section) {
   const rebind = () => {
     click('#upd-check', async (b) => { state.update = await busyBtn(b, 'Buscando…', () => api('GET', '/api/update/status?refresh=1')); $('#upd-block', m.el).innerHTML = updateBlock(); rebind(); renderSidebar(); });
     click('#upd-apply', async (b) => {
-      if (!confirm('Se descargará la nueva versión y la aplicación se reiniciará unos segundos. ¿Continuar?')) return;
+      if (!(await confirmInterrupt('Se descargará la nueva versión y la aplicación se reiniciará unos segundos. ¿Continuar?'))) return;
       const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/update/apply'));
       afterRestart(r, `Actualizado a ${r.to}`, m);
     });
     click('#upd-rollback', async (b) => {
-      if (!confirm('¿Volver a la versión anterior a la última actualización?')) return;
+      if (!(await confirmInterrupt('¿Volver a la versión anterior a la última actualización?'))) return;
       const r = await busyBtn(b, 'Restaurando…', () => api('POST', '/api/update/rollback'));
       afterRestart(r, `Restaurada la versión ${r.to}`, m);
     });
@@ -1161,8 +1308,8 @@ async function settingsModal(section) {
     renderModels();
     m.close(); settingsModal();
   });
-  click('#oc-restart', async (b) => { await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart')); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
-  click('#oc-upgrade', async (b) => { const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });
+  click('#oc-restart', async (b) => { if (!(await confirmInterrupt('Se reiniciará OpenCode. ¿Continuar?'))) return; await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart')); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
+  click('#oc-upgrade', async (b) => { if (!(await confirmInterrupt('Se actualizará OpenCode y se reiniciará. ¿Continuar?'))) return; const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });
   click('#oc-logs', async () => { const r = await api('GET', '/api/opencode/status'); q('#oc-logbox').innerHTML = `<div class="output">${esc((r.logs || []).join('\n') || 'Sin salida todavía')}</div>`; });
   click('#app-install', async () => { await installApp(); $('#app-block', m.el).innerHTML = appBlock(); });
   click('#pw-save', async (b) => { await busyBtn(b, 'Guardando…', () => api('PUT', '/api/password', { current: q('#pw-cur').value, next: q('#pw-new').value })); toast('Contraseña cambiada'); q('#pw-cur').value = ''; q('#pw-new').value = ''; });
@@ -1209,6 +1356,7 @@ function bindShell() {
         case 'new-project': state.navOpen = false; applyPanelState(); newProjectModal(); break;
         case 'new-session': await newSession(); break;
         case 'select-session': await selectSession(t.dataset.id); break;
+        case 'sysmon': state.navOpen = false; applyPanelState(); sysModal(); break;
         case 'session-menu': e.stopPropagation(); sessionMenuModal(t.dataset.pid, t.dataset.id); break;
         case 'toggle-pin': {
           e.stopPropagation();

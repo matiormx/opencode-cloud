@@ -28,6 +28,10 @@ export function list(projectId, sessionId) {
   };
 }
 
+export function countAll() {
+  return data.items.length;
+}
+
 export function add(projectId, sessionId, text, model) {
   text = String(text || '').trim();
   if (!text) throw Object.assign(new Error('Mensaje vacío'), { status: 400 });

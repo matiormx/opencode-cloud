@@ -5,6 +5,7 @@ WebUI al estilo Claude para [OpenCode](https://opencode.ai), pensada para un VPS
 - **Proyectos**: crea proyectos vacíos o clónalos desde GitHub; cada uno es una carpeta git en el servidor con sus propias conversaciones.
 - **Chat con OpenCode**: respuestas en streaming, herramientas desplegables, solicitud de permisos, selector de modelo y API keys de proveedores.
 - **Destacadas y recientes**: encima de los proyectos salen tus conversaciones destacadas (★) y las 5 más recientes de todos los proyectos; desde ⋯ se cambia el título, se destaca o se elimina.
+- **Recursos del VPS**: en el menú lateral, minigráficos de CPU y RAM; al pulsarlos se abre el detalle de la última hora (CPU, memoria, red), con disco, carga y tiempo encendido.
 - **Cola de mensajes**: si OpenCode está trabajando, lo que escribas espera en una cola y se envía solo cuando termine, en orden y con el modelo elegido. Vive en el servidor, así que sigue aunque cierres la app.
 - **Git y GitHub**: fetch, pull (fusión), push, commit, ramas, fusionar ramas, resolución de conflictos asistida por OpenCode, y crear/fusionar Pull Requests.
 - **PWA mobile-first**: se instala como aplicación en móvil, tablet y escritorio, con cajón lateral, hojas inferiores y soporte de teclado en pantalla.
@@ -116,6 +117,8 @@ Sube cambios a la rama `main` de tu repo. En la WebUI aparecerá un aviso **«Ac
 - **Actualizar ahora**: hace `git merge --ff-only`, ejecuta `npm ci` si cambiaron las dependencias y reinicia el servicio (la página se recarga sola).
 - **Volver a la versión anterior**: restaura el commit previo a la última actualización.
 - Se bloquea si hay cambios locales sin confirmar en `/opt/opencode-cloud`, y si `npm ci` falla se revierte automáticamente.
+
+Si OpenCode está trabajando en alguna conversación, la app te avisa antes de actualizar o reiniciar, porque esa tarea se interrumpiría (los mensajes en cola sí se envían después).
 
 También puedes **actualizar OpenCode** (`opencode upgrade`) o reiniciarlo desde Ajustes.
 
