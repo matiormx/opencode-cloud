@@ -1,1 +1,151 @@
-# opencode-cloud
+# OpenCode Cloud
+
+WebUI al estilo Claude para [OpenCode](https://opencode.ai), pensada para un VPS con Ubuntu 24.04.
+
+- **Proyectos**: crea proyectos vacíos o clónalos desde GitHub; cada uno es una carpeta git en el servidor con sus propias conversaciones.
+- **Chat con OpenCode**: respuestas en streaming, herramientas desplegables, solicitud de permisos, selector de modelo y API keys de proveedores.
+- **Git y GitHub**: fetch, pull (fusión), push, commit, ramas, fusionar ramas, resolución de conflictos asistida por OpenCode, y crear/fusionar Pull Requests.
+- **Autoactualización**: la WebUI compara tu instalación con la rama de GitHub y actualiza con un clic (con vuelta atrás a la versión anterior).
+
+```
+Navegador ──HTTPS──▶ Caddy ──▶ opencode-cloud (Node, :3000) ──▶ opencode serve (127.0.0.1:4096)
+                                   │                                  └─ trabaja en /var/lib/opencode-cloud/projects/<proyecto>
+                                   └─ git / GitHub API
+```
+
+OpenCode solo escucha en `127.0.0.1` y con contraseña interna aleatoria; lo único expuesto es esta aplicación, protegida por contraseña.
+
+## 1. Subir este proyecto a GitHub
+
+Desde la carpeta del proyecto, en tu equipo:
+
+```bash
+git add -A && git commit -m "OpenCode Cloud"
+# con GitHub CLI:
+gh repo create opencode-cloud --private --source=. --push
+# o creando el repo vacío en github.com y luego:
+git remote add origin https://github.com/TU_USUARIO/opencode-cloud.git
+git push -u origin main
+```
+
+> Un repositorio **privado** es lo recomendable. Para que el VPS pueda clonarlo y actualizarse necesitará un token (ver abajo).
+
+## 2. Instalar en el VPS
+
+Conéctate por SSH al VPS (Ubuntu 24.04) y ejecuta:
+
+```bash
+git clone https://github.com/TU_USUARIO/opencode-cloud.git
+cd opencode-cloud
+sudo DOMAIN=cloud.midominio.com ./deploy/install.sh
+```
+
+El instalador:
+
+1. instala Node.js 22, git, ripgrep y dependencias de compilación;
+2. crea el usuario de sistema `occloud` e instala OpenCode para ese usuario;
+3. clona el repositorio en `/opt/opencode-cloud` e instala dependencias;
+4. guarda datos en `/var/lib/opencode-cloud` y genera una contraseña de administrador (se muestra una sola vez);
+5. crea el servicio `opencode-cloud` en systemd (arranca solo y se reinicia si cae);
+6. con `DOMAIN`, instala Caddy con HTTPS automático (el DNS debe apuntar ya al VPS y los puertos 80/443 estar abiertos).
+
+Variables opcionales (se pasan delante del comando):
+
+| Variable | Para qué |
+|---|---|
+| `DOMAIN=cloud.midominio.com` | HTTPS con Caddy. **Recomendado.** |
+| `GITHUB_TOKEN=...` | Clonar un repo privado; además se guarda para que la WebUI pueda actualizarse |
+| `ADMIN_PASSWORD=...` | Contraseña inicial (si no, se genera una) |
+| `REPO_URL=...` | Repo del que instalar (por defecto, el `origin` del clon desde el que lanzas el script) |
+| `BRANCH=main` | Rama que sigue el actualizador |
+| `OC_PERMISSION=allow` | OpenCode edita y ejecuta comandos sin pedir permiso (por defecto `ask`) |
+| `EXPOSE_HTTP=1` | Sin dominio: escucha en `0.0.0.0` por HTTP **sin cifrar** |
+| `APP_USER`, `APP_DIR`, `DATA_DIR`, `PORT` | Rutas y puerto |
+
+**Sin dominio** el servicio escucha solo en `127.0.0.1`. Accede con un túnel SSH:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 usuario@IP_DEL_VPS     # y abre http://localhost:3000
+```
+
+El instalador se puede volver a ejecutar sin riesgo: actualiza el código, conserva datos y contraseña.
+
+## 3. Primer uso
+
+1. Entra con la contraseña que mostró el instalador.
+2. **Ajustes → GitHub**: pega un token.
+   - *Fine-grained*: acceso a los repos que vayas a usar, con permisos **Contents: lectura y escritura** y **Pull requests: lectura y escritura**.
+   - *Clásico*: scope `repo`.
+3. **Ajustes → Proveedores de IA**: añade la API key de tu proveedor (Anthropic, OpenAI, OpenRouter, …). Los modelos aparecen en el selector del chat.
+4. **Nuevo proyecto → Clonar desde GitHub**, elige un repositorio, y empieza a pedirle cosas a OpenCode.
+
+### Sincronizar con GitHub
+
+Panel **Git** (botón arriba a la derecha del proyecto):
+
+- **Fetch / Pull / Push** contra `origin`. Pull fusiona (`--no-rebase`).
+- **Fusionar rama**: elige una rama y fusiónala en la actual. Si hay conflictos, el panel los lista y puedes **pedir a OpenCode que los resuelva** o abortar la fusión. Revisas y haces commit tú.
+- **Commit** de todos los cambios (también por OpenCode) y **Commit y push**.
+- **Pull Requests**: crear uno desde la rama actual, o listar los abiertos y fusionarlos en GitHub (merge o squash). Después, haz Pull para traer el resultado.
+
+## 4. Actualizar la aplicación desde GitHub
+
+Sube cambios a la rama `main` de tu repo. En la WebUI aparecerá un aviso **«Actualización disponible»** (se consulta cada 6 h y al abrir Ajustes). En **Ajustes → Actualizaciones**:
+
+- **Actualizar ahora**: hace `git merge --ff-only`, ejecuta `npm ci` si cambiaron las dependencias y reinicia el servicio (la página se recarga sola).
+- **Volver a la versión anterior**: restaura el commit previo a la última actualización.
+- Se bloquea si hay cambios locales sin confirmar en `/opt/opencode-cloud`, y si `npm ci` falla se revierte automáticamente.
+
+También puedes **actualizar OpenCode** (`opencode upgrade`) o reiniciarlo desde Ajustes.
+
+## Seguridad: léelo antes de exponerlo
+
+Esta aplicación da a un agente de IA acceso a una shell del servidor. Trátala como si fuera una terminal remota.
+
+- **Usa HTTPS** (`DOMAIN=`). Con HTTP plano, la contraseña y las sesiones viajan sin cifrar.
+- El agente se ejecuta con los permisos del usuario `occloud` y **puede leer sus archivos**, incluido `/var/lib/opencode-cloud/settings.json` (token de GitHub) y las claves de proveedores. Por eso:
+  - usa un token de GitHub *fine-grained* limitado a los repos necesarios;
+  - mantén `OC_PERMISSION=ask` salvo que aceptes ese riesgo, y no pegues credenciales en el chat.
+- No ejecutes nada más sensible en el mismo VPS. Un VPS dedicado es lo ideal.
+- Login con límite de intentos, cookie `HttpOnly`/`SameSite=Strict`/`Secure` (con dominio) y cabecera anti-CSRF. Es un único usuario administrador.
+- El token de GitHub solo se envía a hosts de `GIT_ALLOWED_HOSTS` (por defecto `github.com`) y nunca queda en `.git/config`.
+- Cambia la contraseña en **Ajustes → Seguridad**, o desde el servidor:
+  `sudo -u occloud DATA_DIR=/var/lib/opencode-cloud node /opt/opencode-cloud/bin/set-password.js 'nueva'`
+
+## Operación
+
+```bash
+systemctl status opencode-cloud        # estado
+journalctl -u opencode-cloud -f        # registros
+sudo systemctl restart opencode-cloud
+sudo nano /etc/opencode-cloud.env      # configuración (luego reiniciar)
+```
+
+Copia de seguridad: basta con `/var/lib/opencode-cloud` (proyectos, ajustes, contraseña). OpenCode guarda sus conversaciones y credenciales en `~occloud/.local/share/opencode`.
+
+## Desarrollo local
+
+```bash
+npm install
+npm run set-password -- "mi-contraseña"
+npm start            # http://127.0.0.1:3000, datos en ./data
+```
+
+Requiere `opencode` en el PATH (o `OPENCODE_BIN=/ruta/a/opencode`) y Node ≥ 20.11.
+
+## Problemas frecuentes
+
+- **«OpenCode no responde»**: Ajustes → OpenCode → *Ver registro*. Comprueba que existe `~occloud/.opencode/bin/opencode`.
+- **No salen modelos**: añade una API key en Ajustes y pulsa *Reiniciar OpenCode*.
+- **Clonar un repo privado falla**: revisa el token y sus permisos; la URL debe ser `https://github.com/...` (no SSH).
+- **El botón de actualizar está bloqueado**: hay cambios locales en `/opt/opencode-cloud` (`sudo -u occloud git -C /opt/opencode-cloud status`).
+- **Caddy no obtiene el certificado**: el DNS del dominio debe apuntar al VPS y los puertos 80 y 443 deben estar abiertos.
+
+## Estructura
+
+```
+server/   backend Express (auth, proyectos, git, GitHub, proxy a OpenCode, actualizador)
+public/   WebUI sin build (HTML + JS + CSS)
+bin/      set-password.js, git-askpass.sh
+deploy/   install.sh
+```
