@@ -16,6 +16,8 @@ const I = {
   more: '<circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
   down: '<path d="M12 5v14M5 12l7 7 7-7"/>',
+  star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+  chev: '<path d="M7 10l5 5 5-5"/>',
 };
 
 const store = {
@@ -184,7 +186,7 @@ async function mountApp() {
           <div class="composer">
             <textarea id="input" rows="1" placeholder="Pide algo a OpenCode…" aria-label="Mensaje"></textarea>
             <div class="composer-bar">
-              <select id="model" aria-label="Modelo"></select>
+              <button class="model-btn" id="model-btn" type="button" data-act="model-picker" aria-haspopup="dialog" aria-label="Elegir modelo"></button>
               <span class="grow"></span>
               <button class="send" id="send" aria-label="Enviar">${ico(I.send)}</button>
             </div>
@@ -524,23 +526,79 @@ function renderPerms() {
 }
 
 /* ============================== Composer ============================== */
+const modelKey = (p, m) => `${p.id}::${m.id}`;
+
+function allModels() {
+  const out = [];
+  for (const p of state.models?.providers || []) for (const m of p.models) out.push({ key: modelKey(p, m), provider: p.name, name: m.name });
+  return out;
+}
+
 function renderModels() {
-  const sel = $('#model');
-  if (!sel) return;
+  const btn = $('#model-btn');
+  if (!btn) return;
   const providers = state.models?.providers || [];
   if (!providers.length) {
-    sel.innerHTML = '<option value="">Sin modelos: configura una API key en Ajustes</option>';
+    btn.textContent = 'Sin modelos: configura una API key';
+    btn.dataset.empty = '1';
     return;
   }
+  delete btn.dataset.empty;
+  const list = allModels();
+  const favs = (state.models.favorites || []).filter((k) => list.some((x) => x.key === k));
   const defaults = state.models.defaults || {};
   let value = state.model;
-  const exists = (v) => providers.some((p) => p.models.some((m) => `${p.id}::${m.id}` === v));
-  if (!exists(value)) {
+  if (!list.some((x) => x.key === value)) {
     const p = providers[0];
-    value = `${p.id}::${defaults[p.id] || p.models[0]?.id}`;
+    value = favs[0] || `${p.id}::${defaults[p.id] || p.models[0]?.id}`;
   }
   state.model = value;
-  sel.innerHTML = providers.map((p) => `<optgroup label="${esc(p.name)}">${p.models.map((m) => `<option value="${esc(p.id)}::${esc(m.id)}" ${`${p.id}::${m.id}` === value ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>`).join('');
+  const cur = list.find((x) => x.key === value);
+  btn.innerHTML = `<span class="model-name">${esc(cur?.name || value)}</span>${ico(I.chev, 'width="16" height="16"')}`;
+}
+
+function modelPicker() {
+  const providers = state.models?.providers || [];
+  if (!providers.length) return;
+  const m = openModal('Elegir modelo', `
+    <input id="mp-q" type="search" placeholder="Buscar modelo…" autocomplete="off" autocapitalize="off" spellcheck="false" data-1p-ignore="true" data-lpignore="true">
+    <p class="muted" style="margin:8px 0 0">Marca con ★ los que más usas y saldrán arriba.</p>
+    <div id="mp-list"></div>`, {});
+  const row = (x) => {
+    const fav = (state.models.favorites || []).includes(x.key);
+    return `<div class="mp-row ${x.key === state.model ? 'sel' : ''}"><button class="mp-pick" data-key="${esc(x.key)}"><span class="mp-name">${esc(x.name)}</span><span class="mp-prov">${esc(x.provider)}</span></button><button class="mp-star ${fav ? 'on' : ''}" data-fav="${esc(x.key)}" aria-label="${fav ? 'Quitar de favoritos' : 'Añadir a favoritos'}" aria-pressed="${fav}">${ico(I.star, `width="20" height="20" ${fav ? 'style="fill:currentColor"' : ''}`)}</button></div>`;
+  };
+  const draw = () => {
+    const term = $('#mp-q', m.el).value.trim().toLowerCase();
+    const match = (x) => !term || `${x.name} ${x.provider} ${x.key}`.toLowerCase().includes(term);
+    const list = allModels().filter(match);
+    const favKeys = state.models.favorites || [];
+    const favs = favKeys.map((k) => list.find((x) => x.key === k)).filter(Boolean);
+    let html = '';
+    if (favs.length) html += `<h3>★ Favoritos</h3>${favs.map(row).join('')}`;
+    const groups = new Map();
+    for (const x of list) { if (!groups.has(x.provider)) groups.set(x.provider, []); groups.get(x.provider).push(x); }
+    for (const [name, items] of groups) html += `<h3>${esc(name)} <span class="muted">· ${items.length}</span></h3>${items.map(row).join('')}`;
+    $('#mp-list', m.el).innerHTML = html || '<p class="muted">Sin resultados.</p>';
+  };
+  draw();
+  $('#mp-q', m.el).addEventListener('input', draw);
+  $('#mp-list', m.el).addEventListener('click', async (e) => {
+    const pick = e.target.closest('[data-key]');
+    const star = e.target.closest('[data-fav]');
+    if (pick) {
+      state.model = pick.dataset.key; store.set('model', state.model); renderModels(); m.close();
+    } else if (star) {
+      const k = star.dataset.fav;
+      const prev = state.models.favorites || [];
+      const next = prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k];
+      state.models.favorites = next;
+      const top = $('.modal-body', m.el).scrollTop;
+      draw(); $('.modal-body', m.el).scrollTop = top;
+      try { await api('PUT', '/api/models/favorites', { favorites: next }); } catch (err) { state.models.favorites = prev; draw(); toast(err.message, 'err'); }
+    }
+  });
+  setTimeout(() => { if (matchMedia('(min-width: 860px)').matches) $('#mp-q', m.el)?.focus(); }, 50);
 }
 
 function updateSendButton() {
@@ -980,6 +1038,7 @@ function bindShell() {
     try {
       switch (act) {
         case 'close-panels': closePanels(); break;
+        case 'model-picker': modelPicker(); break;
         case 'install-app': await installApp(); break;
         case 'select-project': if (state.project?.id !== t.dataset.id) await selectProject(t.dataset.id); break;
         case 'project-menu': e.stopPropagation(); state.navOpen = false; applyPanelState(); projectMenuModal(t.dataset.id); break;
@@ -1050,7 +1109,6 @@ function bindShell() {
   });
 
   app.addEventListener('change', async (e) => {
-    if (e.target.id === 'model') { state.model = e.target.value; store.set('model', state.model); }
     if (e.target.id === 'branch-select') {
       try {
         await api('POST', `/api/projects/${state.project.id}/git/checkout`, { branch: e.target.value });
