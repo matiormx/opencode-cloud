@@ -1,6 +1,6 @@
 {
   "name": "opencode-cloud",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "WebUI estilo Claude para OpenCode: proyectos, sincronización con GitHub y autoactualización",
   "private": true,
   "type": "module",

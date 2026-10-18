@@ -5,6 +5,7 @@ WebUI al estilo Claude para [OpenCode](https://opencode.ai), pensada para un VPS
 - **Proyectos**: crea proyectos vacíos o clónalos desde GitHub; cada uno es una carpeta git en el servidor con sus propias conversaciones.
 - **Chat con OpenCode**: respuestas en streaming, herramientas desplegables, solicitud de permisos, selector de modelo y API keys de proveedores.
 - **Git y GitHub**: fetch, pull (fusión), push, commit, ramas, fusionar ramas, resolución de conflictos asistida por OpenCode, y crear/fusionar Pull Requests.
+- **PWA mobile-first**: se instala como aplicación en móvil, tablet y escritorio, con cajón lateral, hojas inferiores y soporte de teclado en pantalla.
 - **Autoactualización**: la WebUI compara tu instalación con la rama de GitHub y actualiza con un clic (con vuelta atrás a la versión anterior).
 
 ```
@@ -88,7 +89,21 @@ Panel **Git** (botón arriba a la derecha del proyecto):
 - **Commit** de todos los cambios (también por OpenCode) y **Commit y push**.
 - **Pull Requests**: crear uno desde la rama actual, o listar los abiertos y fusionarlos en GitHub (merge o squash). Después, haz Pull para traer el resultado.
 
-## 4. Actualizar la aplicación desde GitHub
+## 4. Instalar como aplicación (PWA)
+
+La interfaz es *mobile-first* y se puede instalar para abrirla a pantalla completa:
+
+- **Android / Chrome, Edge (escritorio)**: aparece el botón **Instalar aplicación** en la barra lateral y en Ajustes (o en el menú del navegador).
+- **iPhone / iPad (Safari)**: *Compartir → Añadir a pantalla de inicio*.
+
+Requisitos y detalles:
+
+- Hace falta **HTTPS** (o `localhost`). Con `DOMAIN=` el instalador lo deja listo; por HTTP plano con IP los navegadores no ofrecen instalar.
+- Tras instalar, la app abre al instante y muestra un aviso si no hay conexión. Las respuestas de la API (proyectos, mensajes) **nunca se guardan en caché**: sin red, el chat no funciona.
+- El *service worker* usa estrategia «red primero», así que una actualización desde GitHub se ve en la siguiente apertura sin vaciar cachés.
+- En móvil: desliza desde el borde izquierdo para abrir el menú, y el botón Git abre una hoja inferior.
+
+## 5. Actualizar la aplicación desde GitHub
 
 Sube cambios a la rama `main` de tu repo. En la WebUI aparecerá un aviso **«Actualización disponible»** (se consulta cada 6 h y al abrir Ajustes). En **Ajustes → Actualizaciones**:
 

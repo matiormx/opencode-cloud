@@ -22,12 +22,24 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   );
   next();
 });
 
-app.use(express.static(path.join(config.root, 'public')));
+app.use(
+  express.static(path.join(config.root, 'public'), {
+    setHeaders(res, file) {
+      // El service worker y el manifest deben revalidarse siempre para que las actualizaciones lleguen
+      if (/[\\/](sw\.js|manifest\.webmanifest)$/.test(file)) {
+        res.setHeader('Cache-Control', 'no-cache');
+        if (file.endsWith('sw.js')) res.setHeader('Service-Worker-Allowed', '/');
+      } else if (/[\\/]icons[\\/]/.test(file)) {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+      }
+    },
+  }),
+);
 app.use('/api', auth.csrf);
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);

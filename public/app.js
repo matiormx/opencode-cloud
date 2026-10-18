@@ -81,7 +81,8 @@ const state = {
   busyGrace: 0,
   models: null,
   model: store.get('model'),
-  gitOpen: store.get('gitOpen', false),
+  // En pantallas pequeñas Git es una hoja que empieza cerrada; en ≥1200px se recuerda la preferencia
+  gitOpen: matchMedia('(min-width: 1200px)').matches ? store.get('gitOpen', false) : false,
   git: null,
   gitOutput: '',
   update: null,
@@ -89,6 +90,55 @@ const state = {
   navOpen: false,
 };
 let events = null;
+let installPromptEvent = null;
+
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+function updateOnlineBanner() {
+  $('#offline')?.classList.toggle('hidden', navigator.onLine);
+}
+
+/* ============================== PWA ============================== */
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPromptEvent = e;
+  if ($('#sidebar')) renderSidebar();
+});
+window.addEventListener('appinstalled', () => {
+  installPromptEvent = null;
+  if ($('#sidebar')) renderSidebar();
+  toast('Aplicación instalada');
+});
+window.addEventListener('online', updateOnlineBanner);
+window.addEventListener('offline', updateOnlineBanner);
+
+async function installApp() {
+  if (!installPromptEvent) return;
+  installPromptEvent.prompt();
+  await installPromptEvent.userChoice.catch(() => {});
+  installPromptEvent = null;
+  renderSidebar();
+}
+
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => { /* sin SW: la app funciona igual, solo sin modo sin conexión */ });
+  });
+}
+
+// Altura real de la ventana visible (teclado en pantalla): mantiene el campo de mensaje a la vista, también en iOS
+(function trackViewport() {
+  const vv = window.visualViewport;
+  const apply = () => {
+    document.documentElement.style.setProperty('--app-h', `${Math.round(vv ? vv.height : innerHeight)}px`);
+    if (vv && vv.offsetTop) window.scrollTo(0, 0);
+  };
+  apply();
+  (vv || window).addEventListener('resize', apply);
+  vv?.addEventListener('scroll', apply);
+  window.addEventListener('orientationchange', () => setTimeout(apply, 250));
+})();
 
 /* ============================== Login ============================== */
 function showLogin() {
@@ -118,10 +168,13 @@ function showLogin() {
 async function mountApp() {
   $('#root').innerHTML = `
     <div class="app" id="app">
-      <aside class="sidebar" id="sidebar"></aside>
+      <div class="scrim" id="scrim" data-act="close-panels"></div>
+      <aside class="sidebar" id="sidebar" aria-label="Proyectos"></aside>
       <section class="main" id="main">
         <header class="topbar" id="topbar"></header>
+        <div class="offline hidden" id="offline" role="status">Sin conexión: no se pueden enviar mensajes hasta que vuelva la red.</div>
         <div class="chat" id="chat"><div class="chat-inner" id="chat-inner"></div></div>
+        <button class="to-bottom hidden" id="to-bottom" aria-label="Ir al final">${ico(I.down)}</button>
         <div class="composer-wrap">
           <div class="composer">
             <textarea id="input" rows="1" placeholder="Pide algo a OpenCode…" aria-label="Mensaje"></textarea>
@@ -133,10 +186,11 @@ async function mountApp() {
           </div>
         </div>
       </section>
-      <aside class="gitpanel hidden" id="gitpanel"></aside>
+      <aside class="gitpanel" id="gitpanel" aria-label="Control de versiones"></aside>
     </div>`;
 
   bindShell();
+  updateOnlineBanner();
   await Promise.all([loadProjects(), loadModels(), loadUpdate(false)]);
   renderAll();
   const last = store.get('project');
@@ -157,10 +211,26 @@ function renderAll() {
   renderMessages();
   renderModels();
   renderGit();
-  $('#app').classList.toggle('git-open', state.gitOpen && !!state.project);
-  $('#gitpanel').classList.toggle('hidden', !(state.gitOpen && state.project));
-  $('#app').classList.toggle('nav-open', state.navOpen);
+  applyPanelState();
   updateSendButton();
+}
+
+// Estado de los paneles: cajón lateral (móvil), hoja/columna de Git
+function applyPanelState() {
+  const app = $('#app');
+  if (!app) return;
+  const gitOpen = state.gitOpen && !!state.project;
+  app.classList.toggle('git-open', gitOpen);
+  app.classList.toggle('nav-open', state.navOpen);
+  $('#gitpanel')?.setAttribute('aria-hidden', String(!gitOpen));
+}
+
+function closePanels() {
+  const wasGit = state.gitOpen;
+  state.navOpen = false;
+  if (matchMedia('(max-width: 1199px)').matches) state.gitOpen = false; // en pantallas pequeñas Git se comporta como hoja
+  applyPanelState();
+  if (wasGit && !state.gitOpen) store.set('gitOpen', false);
 }
 
 /* ============================== Sidebar ============================== */
@@ -184,13 +254,14 @@ function renderSidebar() {
   }).join('');
 
   $('#sidebar').innerHTML = `
-    <div class="brand"><span class="logo">${ico(I.code, 'stroke="#fff" stroke-width="2.6"')}</span>OpenCode Cloud</div>
+    <div class="brand"><span class="logo">${ico(I.code, 'stroke="#fff" stroke-width="2.6"')}</span><span class="grow">OpenCode Cloud</span><button class="icon-btn menu-btn" data-act="close-panels" aria-label="Cerrar menú">${ico(I.x)}</button></div>
     <div class="side-actions"><button class="btn primary" data-act="new-project">${ico(I.plus, 'width="16" height="16"')} Nuevo proyecto</button></div>
     <div class="side-scroll">
       <div class="side-title">Proyectos</div>
       ${items || '<p class="muted" style="padding:8px">Aún no tienes proyectos. Crea uno o clona un repositorio de GitHub.</p>'}
     </div>
     <div class="side-foot">
+      ${installPromptEvent && !isStandalone() ? `<button class="install-pill" data-act="install-app"><span>${ico(I.down, 'width="16" height="16"')}</span><span><strong>Instalar aplicación</strong><br><span class="muted">Añádela a tu pantalla de inicio</span></span></button>` : ''}
       ${upd?.behind ? `<button class="update-pill" data-act="settings" data-section="update"><span class="dot"></span><span><strong>Actualización disponible</strong><br><span class="muted">${upd.behind} cambio${upd.behind > 1 ? 's' : ''} nuevo${upd.behind > 1 ? 's' : ''} en GitHub</span></span></button>` : ''}
       <div class="row">
         <button class="btn grow" data-act="settings">${ico(I.gear, 'width="16" height="16"')} Ajustes</button>
@@ -206,7 +277,7 @@ function renderTopbar() {
     <button class="icon-btn menu-btn" data-act="toggle-nav" aria-label="Menú">${ico(I.menu)}</button>
     <h2 class="grow">${p ? esc(p.name) : 'OpenCode Cloud'}</h2>
     ${p && st ? `<span class="chip ${st.merging ? 'err' : ''}">${esc(st.branch || '—')}${st.ahead ? ` ↑${st.ahead}` : ''}${st.behind ? ` ↓${st.behind}` : ''}</span>` : ''}
-    ${p ? `<button class="btn small" data-act="toggle-git">${ico(I.git, 'width="15" height="15"')} Git</button>` : ''}`;
+    ${p ? `<button class="btn small" data-act="toggle-git" aria-label="Control de versiones">${ico(I.git, 'width="16" height="16"')}<span class="git-label">Git</span></button>` : ''}`;
 }
 
 /* ============================== Datos ============================== */
@@ -232,6 +303,8 @@ async function loadUpdate(refresh) {
 async function selectProject(id) {
   const p = state.projects.find((x) => x.id === id);
   if (!p) return;
+  // Si el cajón está abierto (móvil), se deja abierto para poder elegir conversación
+  const keepNav = state.navOpen;
   state.project = p;
   state.sessions = [];
   state.sessionId = null;
@@ -245,7 +318,7 @@ async function selectProject(id) {
   await Promise.all([loadSessions(), loadGit()]);
   const remembered = store.get(`session:${id}`);
   const target = state.sessions.find((s) => s.id === remembered) || state.sessions[0];
-  if (target) await selectSession(target.id);
+  if (target) await selectSession(target.id, keepNav);
   else renderAll();
 }
 
@@ -259,12 +332,12 @@ async function loadSessions() {
   renderSidebar();
 }
 
-async function selectSession(id) {
+async function selectSession(id, keepNav = false) {
   state.sessionId = id;
   state.messages = [];
   state.perms.clear();
   store.set(`session:${state.project.id}`, id);
-  state.navOpen = false;
+  if (!keepNav) state.navOpen = false;
   renderAll();
   await refreshMessages(true);
   await pollStatus(true);
@@ -766,6 +839,14 @@ async function settingsModal(section) {
 
   const providerOptions = (models?.all || []).sort((a, b) => a.name.localeCompare(b.name)).map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${models.connected?.includes(p.id) ? ' ✓' : ''}</option>`).join('');
 
+  const appBlock = () => {
+    if (isStandalone()) return '<p class="muted" style="margin:0">Estás usando la aplicación instalada.</p>';
+    if (!window.isSecureContext) return '<div class="banner">Para instalarla como aplicación hace falta HTTPS (o localhost). Accede mediante tu dominio con HTTPS.</div>';
+    if (installPromptEvent) return '<p class="muted" style="margin-top:0">Instálala para abrirla a pantalla completa desde tu pantalla de inicio.</p><button class="btn primary" id="app-install">Instalar aplicación</button>';
+    if (isIOS()) return '<p style="margin:0">En iPhone/iPad (Safari): pulsa <strong>Compartir</strong> y luego <strong>Añadir a pantalla de inicio</strong>.</p>';
+    return '<p class="muted" style="margin:0">Usa el menú del navegador: «Instalar aplicación» o «Añadir a pantalla de inicio».</p>';
+  };
+
   const updateBlock = () => {
     const u = state.update;
     if (!u) return '<p class="muted">No se pudo consultar el estado.</p>';
@@ -808,6 +889,9 @@ async function settingsModal(section) {
     <h3 id="sec-update">Actualizaciones de esta aplicación</h3>
     <div id="upd-block">${updateBlock()}</div>
 
+    <h3>Aplicación</h3>
+    <div id="app-block">${appBlock()}</div>
+
     <h3>Seguridad</h3>
     <div class="row wrap"><input id="pw-cur" type="password" class="grow" placeholder="Contraseña actual" autocomplete="current-password"><input id="pw-new" type="password" class="grow" placeholder="Nueva (mín. 8)" autocomplete="new-password"><button class="btn" id="pw-save">Cambiar</button></div>`;
 
@@ -841,6 +925,7 @@ async function settingsModal(section) {
   click('#oc-restart', async (b) => { await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart')); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
   click('#oc-upgrade', async (b) => { const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });
   click('#oc-logs', async () => { const r = await api('GET', '/api/opencode/status'); q('#oc-logbox').innerHTML = `<div class="output">${esc((r.logs || []).join('\n') || 'Sin salida todavía')}</div>`; });
+  click('#app-install', async () => { await installApp(); $('#app-block', m.el).innerHTML = appBlock(); });
   click('#pw-save', async (b) => { await busyBtn(b, 'Guardando…', () => api('PUT', '/api/password', { current: q('#pw-cur').value, next: q('#pw-new').value })); toast('Contraseña cambiada'); q('#pw-cur').value = ''; q('#pw-new').value = ''; });
 
   if (section === 'update') setTimeout(() => q('#sec-update')?.scrollIntoView({ behavior: 'smooth' }), 50);
@@ -870,16 +955,15 @@ function bindShell() {
 
   app.addEventListener('click', async (e) => {
     const t = e.target.closest('[data-act]');
-    if (!t) {
-      if (state.navOpen && !e.target.closest('#sidebar')) { state.navOpen = false; $('#app').classList.remove('nav-open'); }
-      return;
-    }
+    if (!t) return;
     const act = t.dataset.act;
     try {
       switch (act) {
+        case 'close-panels': closePanels(); break;
+        case 'install-app': await installApp(); break;
         case 'select-project': if (state.project?.id !== t.dataset.id) await selectProject(t.dataset.id); break;
-        case 'project-menu': e.stopPropagation(); projectMenuModal(t.dataset.id); break;
-        case 'new-project': newProjectModal(); break;
+        case 'project-menu': e.stopPropagation(); state.navOpen = false; applyPanelState(); projectMenuModal(t.dataset.id); break;
+        case 'new-project': state.navOpen = false; applyPanelState(); newProjectModal(); break;
         case 'new-session': await newSession(); break;
         case 'select-session': await selectSession(t.dataset.id); break;
         case 'del-session':
@@ -890,12 +974,13 @@ function bindShell() {
           await loadSessions();
           renderMessages();
           break;
-        case 'settings': settingsModal(t.dataset.section); break;
+        case 'settings': state.navOpen = false; applyPanelState(); settingsModal(t.dataset.section); break;
         case 'logout': await api('POST', '/api/logout'); showLogin(); break;
-        case 'toggle-nav': state.navOpen = !state.navOpen; $('#app').classList.toggle('nav-open', state.navOpen); break;
+        case 'toggle-nav': state.navOpen = !state.navOpen; if (state.navOpen) { state.gitOpen = false; } applyPanelState(); break;
         case 'toggle-git':
           state.gitOpen = !state.gitOpen;
-          store.set('gitOpen', state.gitOpen);
+          if (state.gitOpen) state.navOpen = false;
+          if (matchMedia('(min-width: 1200px)').matches) store.set('gitOpen', state.gitOpen);
           renderAll();
           if (state.gitOpen) loadGit();
           break;
@@ -961,6 +1046,49 @@ function bindShell() {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submitInput(); }
   });
   $('#send').addEventListener('click', submitInput);
+
+  // Botón "ir al final" cuando el usuario se aleja del último mensaje
+  const chat = $('#chat');
+  const toBottom = $('#to-bottom');
+  chat.addEventListener('scroll', () => {
+    const far = chat.scrollHeight - chat.scrollTop - chat.clientHeight > 320;
+    toBottom.classList.toggle('hidden', !far);
+  }, { passive: true });
+  toBottom.addEventListener('click', () => chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' }));
+
+  // Con el teclado abierto, mantener el último mensaje visible
+  input.addEventListener('focus', () => setTimeout(() => { chat.scrollTop = chat.scrollHeight; }, 300));
+
+  bindGestures();
+}
+
+// Escape cierra paneles; gesto de deslizar desde el borde izquierdo abre el menú (móvil)
+let gesturesBound = false;
+function bindGestures() {
+  if (gesturesBound) return;
+  gesturesBound = true;
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.querySelector('.backdrop') && (state.navOpen || state.gitOpen)) closePanels();
+  });
+
+  let sx = 0; let sy = 0; let tracking = false; let edge = false;
+  const small = () => matchMedia('(max-width: 859px)').matches;
+  document.addEventListener('touchstart', (e) => {
+    if (!small() || e.touches.length !== 1) return;
+    const t = e.touches[0];
+    sx = t.clientX; sy = t.clientY; tracking = true;
+    edge = sx < 24 && !state.navOpen;
+  }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - sx;
+    const dy = t.clientY - sy;
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.6) return; // gesto horizontal claro
+    if (edge && dx > 0 && !document.querySelector('.backdrop')) { state.navOpen = true; state.gitOpen = false; applyPanelState(); }
+    else if (state.navOpen && dx < 0) { state.navOpen = false; applyPanelState(); }
+  }, { passive: true });
 }
 
 /* ============================== Arranque ============================== */
