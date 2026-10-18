@@ -495,7 +495,9 @@ function sysModal() {
     let d;
     let act = null;
     try { act = await api('GET', '/api/activity'); act.at = Date.now(); state.act = act; } catch { /* sin datos de actividad */ }
-    try { d = await api('GET', '/api/system?points=360'); } catch (e) { m.body.innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
+    let eg = null;
+    const egP = api('GET', '/api/egress').then((x) => { eg = x; }, () => {});
+    try { d = await api('GET', '/api/system?points=360'); await egP; } catch (e) { m.body.innerHTML = `<div class="banner">${esc(e.message)}</div>`; return; }
     state.sys = d;
     const el = $('#sysmon-slot'); if (el) el.innerHTML = sysCardHtml();
     const { now, history } = d;
@@ -521,7 +523,9 @@ function sysModal() {
         ${diskPct !== null ? statRow('Disco', `${fmtBytes(now.disk.used)} de ${fmtBytes(now.disk.total)} (${pct(diskPct)})`, diskPct >= 90) : ''}
         ${statRow('Carga (1 / 5 / 15 min)', `${now.load.join(' / ')} · ${now.cores} núcleo${now.cores > 1 ? 's' : ''}`, now.load[0] > now.cores * 1.5)}
         ${statRow('Encendido desde hace', fmtUptime(now.uptime))}
+        ${eg ? statRow('Salida a internet', eg.tunnel ? `por túnel WireGuard (casa) · IP ${esc(eg.ip || 'sin respuesta')}` : `directa desde el VPS${eg.ip ? ` · IP ${esc(eg.ip)}` : ''}`) : ''}
       </tbody></table>
+      ${eg && !eg.tunnel ? '<p class="muted" style="font-size:12px">¿Bloqueos por la IP del VPS? Puedes sacar solo a OpenCode por tu servidor WireGuard de casa: <code>sudo /opt/opencode-cloud/deploy/egress.sh install cliente.conf</code></p>' : ''}
       <details class="ch-table"><summary>Ver como tabla (últimos ${Math.max(1, Math.round(history.length * d.intervalMs / 60000))} min)</summary>
         <table class="kv"><thead><tr><th></th><th>Mín.</th><th>Media</th><th>Máx.</th></tr></thead><tbody>${tableRows}</tbody></table></details>
       <p class="muted" style="font-size:12px">Una muestra cada ${Math.round(d.intervalMs / 1000)} s; se guarda la última hora (se reinicia al reiniciar el servicio).</p>`;

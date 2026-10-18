@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import express from 'express';
 import * as auth from './auth.js';
 import { config } from './config.js';
+import * as egress from './egress.js';
 import * as git from './git.js';
 import * as gh from './github.js';
 import * as oc from './opencode.js';
@@ -131,6 +132,9 @@ router.get(
 
 // --- Recursos del servidor ---
 router.get('/system', wrap(async (req, res) => res.json(await sysmon.snapshot(req.query.points))));
+
+// --- Salida a internet (túnel WireGuard opcional) ---
+router.get('/egress', wrap(async (req, res) => res.json(await egress.status({ force: req.query.force === '1' }))));
 
 // --- Ajustes ---
 const publicSettings = () => {

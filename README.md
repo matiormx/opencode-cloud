@@ -122,6 +122,23 @@ Si OpenCode está trabajando en alguna conversación, la app te avisa antes de a
 
 También puedes **actualizar OpenCode** (`opencode upgrade`) o reiniciarlo desde Ajustes.
 
+## Salir a internet por tu casa (WireGuard, opcional)
+
+Si el proveedor de los modelos gratuitos bloquea la IP de tu VPS, puedes sacar **solo el tráfico de OpenCode** por un servidor WireGuard propio (por ejemplo, en casa). SSH, Caddy, `apt` y las respuestas a la WebUI siguen usando la IP normal del VPS.
+
+```bash
+# 1. Crea en tu servidor de casa un cliente nuevo y copia su .conf al VPS (por ejemplo /root/casa.conf)
+# 2. En el VPS:
+sudo /opt/opencode-cloud/deploy/egress.sh install /root/casa.conf
+sudo /opt/opencode-cloud/deploy/egress.sh status   # IP directa del VPS frente a IP de salida de OpenCode
+sudo /opt/opencode-cloud/deploy/egress.sh off      # desactivar (on para volver a activarlo, remove para borrarlo)
+shred -u /root/casa.conf                           # la clave privada ya está en /etc/wireguard (600)
+```
+
+Requisitos del lado de casa: `AllowedIPs` del cliente debe incluir `0.0.0.0/0`, el servidor debe reenviar paquetes (`net.ipv4.ip_forward=1`) y hacer NAT hacia internet (`MASQUERADE`), y el puerto UDP debe estar abierto en el router. El instalador ignora `DNS`, `Table`, `PostUp`… del `.conf` para que el túnel no secuestre el resto del VPS, y añade el enrutado por usuario (`ip rule uidrange`) del usuario del servicio. Si el túnel cae, OpenCode vuelve a salir por la IP del VPS en lugar de quedarse sin conexión. Nota: mientras esté activo, las actualizaciones desde GitHub y las llamadas a los proveedores también salen por tu casa, así que dependen de su conexión.
+
+En la WebUI, **Recursos y peticiones** muestra si la salida es directa o por túnel y la IP pública con la que sale.
+
 ## Seguridad: léelo antes de exponerlo
 
 Esta aplicación da a un agente de IA acceso a una shell del servidor. Trátala como si fuera una terminal remota.
@@ -171,5 +188,5 @@ Requiere `opencode` en el PATH (o `OPENCODE_BIN=/ruta/a/opencode`) y Node ≥ 20
 server/   backend Express (auth, proyectos, git, GitHub, proxy a OpenCode, actualizador)
 public/   WebUI sin build (HTML + JS + CSS)
 bin/      set-password.js, git-askpass.sh
-deploy/   install.sh
+deploy/   install.sh, egress.sh (túnel WireGuard opcional)
 ```
