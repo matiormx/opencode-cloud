@@ -331,8 +331,15 @@ function renderWait() {
     const s = remainingSec(row);
     box.innerHTML = `<span class="wait-ico" aria-hidden="true">⏳</span><span><strong>Esperando al proveedor.</strong> ${esc(row.retry.message || 'Límite de peticiones o error temporal')} · reintento ${row.retry.attempt}${s != null ? ` · próximo intento en ${s} s` : ''}</span>`;
     box.classList.remove('hidden');
-  } else if (row?.state === 'permission') {
-    box.innerHTML = '<span class="wait-ico" aria-hidden="true">🔒</span><span><strong>Esperando tu permiso</strong> para continuar.</span>';
+  } else if (row?.state === 'permission' || state.perms.size) {
+    const first = [...state.perms.values()][0];
+    if (!first) {
+      box.innerHTML = '<span class="wait-ico" aria-hidden="true">🔒</span><span><strong>Esperando tu permiso</strong> · cargando la solicitud…</span>';
+    } else {
+      const what = first.title || first.permission || first.type || 'una acción';
+      const pat = [].concat(first.pattern || first.patterns || [])[0];
+      box.innerHTML = `<div class="wait-perm" data-pid="${esc(first.id)}"><div><span class="wait-ico" aria-hidden="true">🔒</span> <strong>OpenCode pide permiso</strong> · ${esc(what)}${state.perms.size > 1 ? ` <span class="muted">(+${state.perms.size - 1} más)</span>` : ''}</div>${pat ? `<code class="wait-pat">${esc(String(pat).slice(0, 140))}</code>` : ''}<div class="row wait-btns"><button class="btn small primary" data-act="perm" data-r="once">Permitir una vez</button><button class="btn small" data-act="perm" data-r="always">Siempre</button><button class="btn small danger" data-act="perm" data-r="reject">Rechazar</button></div></div>`;
+    }
     box.classList.remove('hidden');
   } else {
     box.classList.add('hidden');
@@ -347,6 +354,9 @@ async function loadActivity() {
     state.act = a;
     const slot = $('#sysmon-slot');
     if (slot) slot.innerHTML = sysCardHtml();
+    const mine = (a.sessions || []).some((r) => r.sessionId === state.sessionId && r.projectId === state.project?.id && r.state === 'permission');
+    if (mine && !state.perms.size) await loadPerms();
+    else if (!mine && state.perms.size) { state.perms.clear(); renderPerms(); }
     renderWait();
   } catch { /* se reintenta en el siguiente ciclo */ }
 }
@@ -690,6 +700,7 @@ async function selectSession(id, keepNav = false) {
   await refreshMessages(true);
   await pollStatus(true);
   loadQueue();
+  loadPerms();
 }
 
 async function newSession() {
@@ -804,9 +815,11 @@ function handleEvent(ev) {
   } else if ((t === 'permission.updated' || t === 'permission.asked') && (p.sessionID === state.sessionId)) {
     state.perms.set(p.id, p);
     renderPerms();
+    renderWait();
   } else if (t === 'permission.replied') {
     state.perms.delete(p.permissionID || p.requestID || p.id);
     renderPerms();
+    renderWait();
   }
 }
 
@@ -869,22 +882,27 @@ function renderTyping() {
   if (el) el.innerHTML = state.busy ? '<span class="typing"><i></i><i></i><i></i></span>' : '';
 }
 
+// Solicitudes de permiso pendientes: se piden al servidor (no solo llegan por eventos), para no perderlas
+// al recargar, cambiar de conversación o reconectar.
+async function loadPerms() {
+  if (!state.project || !state.sessionId) return;
+  const pid = state.project.id, sid = state.sessionId;
+  try {
+    const list = await api('GET', `/api/projects/${pid}/permissions`);
+    if (state.project?.id !== pid || state.sessionId !== sid) return;
+    state.perms.clear();
+    for (const x of Array.isArray(list) ? list : []) if (x.sessionID === sid) state.perms.set(x.id, x);
+    renderPerms();
+    renderWait();
+  } catch { /* se reintenta en el siguiente ciclo */ }
+}
+
+// Las solicitudes de permiso se muestran en el aviso fijo sobre el cuadro de texto (renderWait);
+// así se ven siempre, aunque el chat esté desplazado.
 function renderPerms() {
   const el = $('#perms');
-  if (!el) return;
-  el.innerHTML = [...state.perms.values()].map((p) => `
-    <div class="perm" data-pid="${esc(p.id)}">
-      <strong>OpenCode solicita permiso</strong><br>
-      <span class="muted">${esc(p.title || p.permission || p.type || 'acción')}</span>
-      ${p.pattern || p.patterns ? `<pre class="output">${esc([].concat(p.pattern || p.patterns).join('\n'))}</pre>` : ''}
-      <div class="row">
-        <button class="btn small primary" data-act="perm" data-r="once">Permitir una vez</button>
-        <button class="btn small" data-act="perm" data-r="always">Permitir siempre</button>
-        <button class="btn small danger" data-act="perm" data-r="reject">Rechazar</button>
-      </div>
-    </div>`).join('');
-  const chat = $('#chat');
-  if (state.perms.size) chat.scrollTop = chat.scrollHeight;
+  if (el) el.innerHTML = '';
+  renderWait();
 }
 
 /* ============================== Composer ============================== */
@@ -1512,6 +1530,8 @@ function bindShell() {
           await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/permissions/${box.dataset.pid}`, { response: t.dataset.r });
           state.perms.delete(box.dataset.pid);
           renderPerms();
+          renderWait();
+          setTimeout(loadActivity, 800);
           break;
         }
         case 'git-fetch': await gitAction(t, 'Fetch…', 'fetch', {}, { successMsg: 'Fetch completado' }); break;

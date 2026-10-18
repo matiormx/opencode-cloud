@@ -467,6 +467,7 @@ router.delete('/projects/:id/sessions/:sid/queue/:qid', wrap(async (req, res) =>
 }));
 router.delete('/projects/:id/sessions/:sid/queue', wrap(async (req, res) => { const p = getProject(req); queue.clear(p.id, sid(req)); res.json({ ok: true }); }));
 router.post('/projects/:id/sessions/:sid/queue/resume', wrap(async (req, res) => { const p = getProject(req); queue.setPaused(p.id, sid(req), false); res.json({ ok: true }); }));
+router.get('/projects/:id/permissions', ocRoute((dir) => oc.json('GET', '/permission', { directory: dir })));
 router.get('/projects/:id/status', ocRoute((dir) => oc.json('GET', '/session/status', { directory: dir })));
 
 router.post(
