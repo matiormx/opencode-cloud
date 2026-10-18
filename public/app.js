@@ -91,6 +91,7 @@ const state = {
   gitOpen: matchMedia('(min-width: 1200px)').matches ? store.get('gitOpen', false) : false,
   git: null,
   gitOutput: '',
+  gitFail: null,
   update: null,
   perms: new Map(),
   navOpen: false,
@@ -99,8 +100,8 @@ let events = null;
 let installPromptEvent = null;
 
 // Enlaces de GitHub para crear/gestionar el token (con nombre y permisos ya rellenados)
-const GH_TOKEN_FINE = 'https://github.com/settings/personal-access-tokens/new?name=OpenCode+Cloud&description=Token+para+OpenCode+Cloud+%28clonar%2C+push+y+pull+requests%29&expires_in=90&contents=write&pull_requests=write';
-const GH_TOKEN_CLASSIC = 'https://github.com/settings/tokens/new?scopes=repo&description=OpenCode+Cloud';
+const GH_TOKEN_FINE = 'https://github.com/settings/personal-access-tokens/new?name=OpenCode+Cloud&description=Token+para+OpenCode+Cloud+%28clonar%2C+push+y+pull+requests%29&expires_in=90&contents=write&pull_requests=write&workflows=write';
+const GH_TOKEN_CLASSIC = 'https://github.com/settings/tokens/new?scopes=repo,workflow&description=OpenCode+Cloud';
 const GH_TOKENS_PAGE = 'https://github.com/settings/tokens';
 
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
@@ -1124,6 +1125,11 @@ function renderGit() {
   el.innerHTML = `
     <div class="row"><h3 class="grow">Control de versiones</h3><button class="icon-btn" data-act="toggle-git" aria-label="Cerrar">${ico(I.x)}</button></div>
     ${conflictBanner}
+    ${state.gitFail ? `<div class="banner err" style="margin-bottom:12px">
+      <div class="row"><strong class="grow">${esc(state.gitFail.ex ? state.gitFail.ex.title : 'Git ha devuelto un error')}</strong><button class="icon-btn" data-act="git-dismiss" aria-label="Descartar" style="width:32px;height:32px">${ico(I.x)}</button></div>
+      ${state.gitFail.ex ? `<p style="margin:6px 0 0">${esc(state.gitFail.ex.advice)}</p>` : ''}
+      <details ${state.gitFail.ex ? '' : 'open'} style="margin-top:8px"><summary class="muted" style="cursor:pointer">Salida completa de git</summary><div class="output" style="max-height:none;user-select:text">${esc(state.gitFail.text)}</div></details>
+    </div>` : ''}
 
     <div class="card"><h4>Repositorio remoto</h4>
       ${st.remote ? `<div class="muted" style="word-break:break-all;font-size:13px">${esc(st.remote)}</div>`
@@ -1164,19 +1170,54 @@ function renderGit() {
     <div class="card"><h4>Historial</h4><div class="log">${g.log.length ? g.log.map((c) => `<div><span class="h">${esc(c.hash)}</span>${esc(c.subject)}<br><span class="muted">${esc(c.author)} · ${esc(c.when)}</span></div>`).join('') : '<span class="muted">Sin commits.</span>'}</div></div>`;
 }
 
+// Traduce los errores típicos de git/GitHub a algo accionable. `text` es la salida completa de git.
+function gitExplain(text) {
+  const t = String(text || '');
+  const rules = [
+    [/without [`'"]?workflow[`'"]? scope|workflow[`'"]? scope/i, 'GitHub rechaza el push porque incluye archivos de GitHub Actions (.github/workflows) y tu token no tiene permiso para modificarlos.',
+      'Crea un token nuevo con el permiso «Workflows» (fine-grained: Workflows → lectura y escritura; clásico: marca «workflow») y pégalo en Ajustes → GitHub.'],
+    [/GH013|push protection|secret.?scanning|Push cannot contain secrets/i, 'GitHub ha bloqueado el push porque detecta un secreto (clave o token) en los commits.',
+      'Quita el secreto del archivo, rota esa clave y rehaz el commit. El mensaje de abajo indica el archivo y la línea.'],
+    [/\[rejected\].*(fetch first|non-fast-forward)|non-fast-forward|fetch first|Updates were rejected/i, 'GitHub tiene cambios que tú no tienes, así que no acepta el push.',
+      'Pulsa «Pull (fusionar)» y, cuando termine, vuelve a hacer «Push».'],
+    [/protected branch|GH006|Changes must be made through a pull request|required status check/i, 'La rama está protegida en GitHub: no admite push directos.',
+      'Crea una rama nueva, súbela y abre un Pull Request.'],
+    [/Permission to .* denied|403|Write access to repository not granted|permission denied/i, 'Tu token no tiene permiso de escritura en este repositorio.',
+      'En GitHub edita el token: añade este repositorio y da «Contents» en lectura y escritura (o crea un token nuevo desde Ajustes → GitHub).'],
+    [/Authentication failed|could not read (Username|Password)|Invalid username or password|Bad credentials|401/i, 'GitHub no acepta el token (caducado o revocado).',
+      'Crea un token nuevo y pégalo en Ajustes → GitHub.'],
+    [/Repository not found|not found/i, 'GitHub no encuentra el repositorio, o tu token no lo ve.',
+      'Comprueba que existe y que el token incluye este repositorio.'],
+    [/Could not resolve host|Connection timed out|Failed to connect|Operation timed out|unable to access/i, 'No hay conexión con GitHub desde el VPS.', 'Reintenta en un momento. Si usas el túnel WireGuard, comprueba que esté funcionando.'],
+  ];
+  for (const [re, title, advice] of rules) if (re.test(t)) return { title, advice };
+  return null;
+}
+
+// Una línea útil para el aviso corto (la primera de git suele ser solo «To https://…»)
+function gitBestLine(text) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const pick = lines.find((l) => /^(fatal:|error:|remote: (error|fatal|Permission|Invalid|Repository|Write)|!\s)/i.test(l)) || lines.find((l) => !/^To /.test(l)) || lines[0] || 'Error de git';
+  return pick.replace(/^(fatal|error): /i, '').slice(0, 200);
+}
+
 async function gitAction(btn, label, path, body, { successMsg } = {}) {
   const id = state.project.id;
   return busyBtn(btn, label, async () => {
     try {
       const r = await api('POST', `/api/projects/${id}/git/${path}`, body || {});
       state.gitOutput = (r.output || '').trim();
+      state.gitFail = null;
       if (r.conflict) toast('Hay conflictos que resolver', 'err');
       else toast(successMsg || 'Hecho');
       await loadGit();
       return r;
     } catch (e) {
-      state.gitOutput = e.data?.output || e.message;
-      toast(e.message.split('\n')[0].slice(0, 160), 'err');
+      const full = e.data?.output || e.message;
+      const ex = gitExplain(full);
+      state.gitOutput = '';
+      state.gitFail = { text: full, ex };
+      toast(ex ? ex.title : gitBestLine(full), 'err');
       await loadGit();
     }
   });
@@ -1397,7 +1438,7 @@ async function settingsModal(section) {
           <a class="btn" href="${GH_TOKEN_FINE}" target="_blank" rel="noopener noreferrer">Crear token (recomendado)</a>
           <a class="btn" href="${GH_TOKEN_CLASSIC}" target="_blank" rel="noopener noreferrer">Crear token clásico (más rápido)</a>
         </div>
-        <p class="muted" style="font-size:13.5px;margin:0 0 12px"><strong>Recomendado</strong> (fine-grained): se abre ya con los permisos <em>Contents</em> y <em>Pull requests</em> en lectura y escritura; solo tienes que elegir en la página los repositorios a los que dará acceso y pulsar «Generate token». <strong>Clásico</strong>: viene con el permiso <code>repo</code> marcado y da acceso a todos tus repos. GitHub muestra el token una sola vez: cópialo y pégalo aquí. Se guarda solo en tu servidor.</p>
+        <p class="muted" style="font-size:13.5px;margin:0 0 12px"><strong>Recomendado</strong> (fine-grained): se abre ya con los permisos <em>Contents</em>, <em>Pull requests</em> y <em>Workflows</em> (para repos con GitHub Actions) en lectura y escritura; solo tienes que elegir en la página los repositorios a los que dará acceso y pulsar «Generate token». <strong>Clásico</strong>: viene con los permisos <code>repo</code> y <code>workflow</code> marcados y da acceso a todos tus repos. GitHub muestra el token una sola vez: cópialo y pégalo aquí. Se guarda solo en tu servidor.</p>
         <div class="row"><input id="gh-token" name="gh-pat-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="github_pat_… o ghp_…"><button class="btn primary" id="gh-save">Guardar</button></div>`}
     </div>
 
@@ -1592,6 +1633,7 @@ function bindShell() {
         case 'settings': state.navOpen = false; applyPanelState(); settingsModal(t.dataset.section); break;
         case 'logout': await api('POST', '/api/logout'); showLogin(); break;
         case 'toggle-nav': state.navOpen = !state.navOpen; if (state.navOpen) { state.gitOpen = false; } applyPanelState(); break;
+        case 'git-dismiss': state.gitFail = null; renderGit(); break;
         case 'toggle-git':
           state.gitOpen = !state.gitOpen;
           if (state.gitOpen) state.navOpen = false;
