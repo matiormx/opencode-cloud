@@ -15,6 +15,13 @@
 #   APP_USER=occloud  APP_DIR=/opt/opencode-cloud  DATA_DIR=/var/lib/opencode-cloud  PORT=3000
 set -euo pipefail
 
+# Variables que el usuario no ha definido: se preguntarán si hay terminal interactiva
+[ -z "${DOMAIN+x}" ] && ASK_DOMAIN=1 || ASK_DOMAIN=0
+[ -z "${EXPOSE_HTTP+x}" ] && ASK_EXPOSE=1 || ASK_EXPOSE=0
+[ -z "${GITHUB_TOKEN+x}" ] && ASK_TOKEN=1 || ASK_TOKEN=0
+[ -z "${ADMIN_PASSWORD+x}" ] && ASK_PASSWORD=1 || ASK_PASSWORD=0
+[ -z "${OC_PERMISSION+x}" ] && ASK_PERMISSION=1 || ASK_PERMISSION=0
+
 APP_USER="${APP_USER:-occloud}"
 APP_DIR="${APP_DIR:-/opt/opencode-cloud}"
 DATA_DIR="${DATA_DIR:-/var/lib/opencode-cloud}"
@@ -47,6 +54,97 @@ if [ -z "$REPO_URL" ] && git -C "$SRC_DIR" rev-parse --is-inside-work-tree >/dev
 fi
 [ -n "$REPO_URL" ] || die "No se pudo determinar el repositorio. Indica REPO_URL=https://github.com/usuario/opencode-cloud.git"
 case "$REPO_URL" in *@*) warn "REPO_URL parece contener credenciales; no las incluyas en la URL (usa GITHUB_TOKEN)";; esac
+
+# ---------------------------------------------------------------- Preguntas interactivas
+# Funciona también con `curl ... | sudo bash` porque lee de /dev/tty.
+# Para saltarlas: NONINTERACTIVE=1 (o pasar las variables por entorno).
+INTERACTIVE=0
+if [ "${NONINTERACTIVE:-0}" != 1 ] && ( exec </dev/tty ) 2>/dev/null; then INTERACTIVE=1; fi
+
+ask() { # ask "texto" VAR [secret]
+  local prompt="$1" var="$2" secret="${3:-}" reply=""
+  if [ "$secret" = secret ]; then
+    read -r -s -p "$prompt" reply </dev/tty >/dev/tty; echo >/dev/tty
+  else
+    read -r -p "$prompt" reply </dev/tty >/dev/tty
+  fi
+  printf -v "$var" '%s' "$reply"
+}
+yesno() { # yesno "texto" defecto(s|n) -> 0 si sí
+  local def="$2" hint reply
+  [ "$def" = s ] && hint="[S/n]" || hint="[s/N]"
+  read -r -p "$1 $hint " reply </dev/tty >/dev/tty
+  reply="${reply:-$def}"
+  case "$reply" in s|S|si|SI|Si|sí|y|Y|yes) return 0;; *) return 1;; esac
+}
+
+# Reutiliza el token ya guardado en una instalación anterior (para repos privados al reinstalar)
+if [ -z "$GITHUB_TOKEN" ] && [ -f "$DATA_DIR/settings.json" ]; then
+  GITHUB_TOKEN="$(sed -n 's/.*"githubToken": *"\([^"]*\)".*/\1/p' "$DATA_DIR/settings.json" | head -n1)"
+  [ -n "$GITHUB_TOKEN" ] && ASK_TOKEN=0
+fi
+
+if [ "$INTERACTIVE" = 1 ]; then
+  echo
+  printf '\033[1mConfiguración de OpenCode Cloud\033[0m  (Enter = valor por defecto)\n\n' >/dev/tty
+
+  if [ "$ASK_DOMAIN" = 1 ]; then
+    echo "Dominio para HTTPS automático (el DNS debe apuntar ya a este servidor y los puertos 80/443 estar abiertos)." >/dev/tty
+    while :; do
+      ask "Dominio (vacío = sin dominio): " DOMAIN
+      DOMAIN="${DOMAIN#http://}"; DOMAIN="${DOMAIN#https://}"; DOMAIN="${DOMAIN%%/*}"
+      [ -z "$DOMAIN" ] || [[ "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && break
+      echo "  Dominio no válido, prueba de nuevo." >/dev/tty
+    done
+  fi
+  if [ -z "$DOMAIN" ] && [ "$ASK_EXPOSE" = 1 ]; then
+    echo "Sin dominio el servicio solo escucha en 127.0.0.1 (acceso por túnel SSH)." >/dev/tty
+    if yesno "¿Exponerlo por HTTP sin cifrar en el puerto $PORT? (no recomendado)" n; then EXPOSE_HTTP=1; fi
+  fi
+
+  if [ "$ASK_PASSWORD" = 1 ]; then
+    if [ -f "$DATA_DIR/auth.json" ]; then
+      if yesno "Ya existe una contraseña de administrador. ¿Cambiarla?" n; then
+        while :; do
+          ask "Nueva contraseña (mín. 8 caracteres): " ADMIN_PASSWORD secret
+          [ "${#ADMIN_PASSWORD}" -ge 8 ] || { echo "  Demasiado corta." >/dev/tty; continue; }
+          ask "Repítela: " PW2 secret
+          [ "$ADMIN_PASSWORD" = "$PW2" ] && break
+          echo "  No coinciden." >/dev/tty
+        done
+      fi
+    else
+      while :; do
+        ask "Contraseña de administrador (vacío = generar una aleatoria): " ADMIN_PASSWORD secret
+        [ -z "$ADMIN_PASSWORD" ] && break
+        [ "${#ADMIN_PASSWORD}" -ge 8 ] || { echo "  Mínimo 8 caracteres." >/dev/tty; continue; }
+        ask "Repítela: " PW2 secret
+        [ "$ADMIN_PASSWORD" = "$PW2" ] && break
+        echo "  No coinciden." >/dev/tty
+      done
+    fi
+  fi
+
+  if [ "$ASK_TOKEN" = 1 ]; then
+    echo "Token de GitHub: necesario si el repositorio es privado; la WebUI lo usa para actualizarse y sincronizar." >/dev/tty
+    ask "Token (vacío = omitir; se podrá añadir luego en Ajustes): " GITHUB_TOKEN secret
+  fi
+
+  if [ "$ASK_PERMISSION" = 1 ]; then
+    if yesno "¿Dejar que OpenCode edite archivos y ejecute comandos SIN pedir permiso?" n; then OC_PERMISSION=allow; fi
+  fi
+
+  echo >/dev/tty
+  echo "Resumen:" >/dev/tty
+  echo "  Repositorio:   $REPO_URL (rama $BRANCH)" >/dev/tty
+  if [ -n "$DOMAIN" ]; then echo "  Acceso:        https://$DOMAIN (Caddy + HTTPS)" >/dev/tty
+  elif [ "$EXPOSE_HTTP" = 1 ]; then echo "  Acceso:        http://IP:$PORT (sin cifrar)" >/dev/tty
+  else echo "  Acceso:        solo local (túnel SSH)" >/dev/tty; fi
+  echo "  Token GitHub:  $([ -n "$GITHUB_TOKEN" ] && echo sí || echo no)" >/dev/tty
+  echo "  Permisos IA:   $OC_PERMISSION" >/dev/tty
+  yesno "¿Continuar con la instalación?" s || die "Instalación cancelada"
+  echo >/dev/tty
+fi
 
 # ---------------------------------------------------------------- Paquetes
 log "Instalando paquetes del sistema"
