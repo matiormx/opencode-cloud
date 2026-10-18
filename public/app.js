@@ -890,6 +890,7 @@ async function settingsModal(section) {
 
     <h3>Proveedores de IA</h3>
     <p class="muted" style="margin-top:0">Añade una API key para que aparezcan sus modelos en el selector.</p>
+    ${(models?.stored || []).length ? `<div id="prov-list" class="stack" style="margin-bottom:10px">${models.stored.map((s) => `<div class="row" style="justify-content:space-between"><div class="grow"><strong>${esc(s.name)}</strong> <span class="muted mono">${esc(s.hint || (s.type === 'oauth' ? 'sesión' : ''))}</span></div><button class="btn danger" data-prov-del="${esc(s.id)}" data-prov-name="${esc(s.name)}">Quitar</button></div>`).join('')}</div>` : ''}
     <div class="row wrap"><select id="prov-id" class="grow">${providerOptions}</select><input id="prov-key" name="provider-key-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="API key"><button class="btn" id="prov-save">Guardar</button></div>
 
     <h3>OpenCode</h3>
@@ -926,12 +927,20 @@ async function settingsModal(section) {
   click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.close(); settingsModal(); });
   click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.close(); settingsModal(); });
   click('#g-save', async () => { await api('PUT', '/api/settings', { gitName: q('#g-name').value, gitEmail: q('#g-email').value }); toast('Identidad guardada (se aplica a nuevos commits)'); });
+  m.el.querySelectorAll('[data-prov-del]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm(`¿Quitar la clave de ${b.dataset.provName}? Sus modelos dejarán de aparecer.`)) return;
+    try {
+      await busyBtn(b, 'Quitando…', () => api('DELETE', `/api/providers/${encodeURIComponent(b.dataset.provDel)}`));
+      toast('Clave eliminada'); await loadModels(); renderModels(); m.close(); settingsModal();
+    } catch (err) { toast(err.message, 'err'); }
+  }));
   click('#prov-save', async (b) => {
     await busyBtn(b, 'Guardando…', () => api('PUT', `/api/providers/${q('#prov-id').value}/key`, { key: q('#prov-key').value }));
     q('#prov-key').value = '';
     toast('Clave guardada');
     await loadModels();
     renderModels();
+    m.close(); settingsModal();
   });
   click('#oc-restart', async (b) => { await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart')); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
   click('#oc-upgrade', async (b) => { const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });

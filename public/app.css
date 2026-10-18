@@ -318,3 +318,6 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 
 /* Campos secretos (API keys/tokens): texto enmascarado sin activar el gestor de contraseñas */
 input.secret { -webkit-text-security: disc; text-security: disc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+.stack { display: flex; flex-direction: column; gap: 8px; }

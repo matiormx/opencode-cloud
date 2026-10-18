@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import express from 'express';
@@ -10,6 +11,8 @@ import * as gh from './github.js';
 import * as oc from './opencode.js';
 import * as store from './store.js';
 import * as updater from './updater.js';
+
+const fsp = fs.promises;
 
 const app = express();
 app.disable('x-powered-by');
@@ -396,7 +399,34 @@ router.get(
       models: Object.values(p.models || {}).map((m) => ({ id: m.id, name: m.name || m.id })),
     }));
     const all = (prov?.all || []).map((p) => ({ id: p.id, name: p.name || p.id }));
-    res.json({ providers, defaults: cfg.default || {}, all, connected: prov?.connected || providers.map((p) => p.id) });
+    const names = new Map(all.map((p) => [p.id, p.name]));
+    const stored = (await readStoredAuth()).map((a) => ({ ...a, name: names.get(a.id) || a.id }));
+    res.json({ providers, defaults: cfg.default || {}, all, stored, connected: prov?.connected || providers.map((p) => p.id) });
+  }),
+);
+
+// Claves guardadas por OpenCode (auth.json). Nunca se devuelve la clave, solo el final.
+async function readStoredAuth() {
+  try {
+    const base = process.env.XDG_DATA_HOME || path.join(process.env.HOME || os.homedir(), '.local', 'share');
+    const raw = JSON.parse(await fsp.readFile(path.join(base, 'opencode', 'auth.json'), 'utf8'));
+    return Object.entries(raw || {}).map(([id, v]) => ({
+      id,
+      type: v?.type || 'api',
+      hint: v?.type === 'api' && typeof v.key === 'string' && v.key.length >= 12 ? `…${v.key.slice(-4)}` : '',
+    }));
+  } catch {
+    return [];
+  }
+}
+
+router.delete(
+  '/providers/:id',
+  wrap(async (req, res) => {
+    if (!/^[A-Za-z0-9._-]{1,80}$/.test(req.params.id)) throw fail('Proveedor no válido');
+    await oc.json('DELETE', `/auth/${req.params.id}`, { directory: config.projectsDir });
+    await oc.json('POST', '/instance/dispose', { directory: config.projectsDir }).catch(() => {});
+    res.json({ ok: true });
   }),
 );
 
@@ -407,6 +437,7 @@ router.put(
     const key = String(req.body?.key || '').trim();
     if (key.length < 8) throw fail('Clave no válida');
     await oc.json('PUT', `/auth/${req.params.id}`, { directory: config.projectsDir, body: { type: 'api', key } });
+    await oc.json('POST', '/instance/dispose', { directory: config.projectsDir }).catch(() => {});
     res.json({ ok: true });
   }),
 );
