@@ -127,6 +127,9 @@ if [ "$INTERACTIVE" = 1 ]; then
 
   if [ "$ASK_TOKEN" = 1 ]; then
     echo "Token de GitHub: necesario si el repositorio es privado; la WebUI lo usa para actualizarse y sincronizar." >/dev/tty
+    echo "  No hace falta tu usuario, se detecta solo. Créalo aquí (ya con los permisos rellenados):" >/dev/tty
+    echo "  https://github.com/settings/personal-access-tokens/new?name=OpenCode+Cloud&expires_in=90&contents=write&pull_requests=write" >/dev/tty
+    echo "  (o uno clásico: https://github.com/settings/tokens/new?scopes=repo&description=OpenCode+Cloud)" >/dev/tty
     ask "Token (vacío = omitir; se podrá añadir luego en Ajustes): " GITHUB_TOKEN secret
   fi
 

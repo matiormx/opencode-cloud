@@ -74,7 +74,7 @@ El instalador se puede volver a ejecutar sin riesgo: actualiza el código, conse
 ## 3. Primer uso
 
 1. Entra con la contraseña que mostró el instalador.
-2. **Ajustes → GitHub**: pega un token.
+2. **Ajustes → GitHub**: pega un token. La propia pantalla trae el enlace para crearlo ya con los permisos rellenados (no hace falta escribir tu usuario: se detecta solo). Enlaces directos: [fine-grained](https://github.com/settings/personal-access-tokens/new?name=OpenCode+Cloud&expires_in=90&contents=write&pull_requests=write) · [clásico](https://github.com/settings/tokens/new?scopes=repo&description=OpenCode+Cloud) · [gestionar mis tokens](https://github.com/settings/tokens).
    - *Fine-grained*: acceso a los repos que vayas a usar, con permisos **Contents: lectura y escritura** y **Pull requests: lectura y escritura**.
    - *Clásico*: scope `repo`.
 3. **Ajustes → Proveedores de IA**: añade la API key de tu proveedor (Anthropic, OpenAI, OpenRouter, …). Los modelos aparecen en el selector del chat.

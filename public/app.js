@@ -92,6 +92,11 @@ const state = {
 let events = null;
 let installPromptEvent = null;
 
+// Enlaces de GitHub para crear/gestionar el token (con nombre y permisos ya rellenados)
+const GH_TOKEN_FINE = 'https://github.com/settings/personal-access-tokens/new?name=OpenCode+Cloud&description=Token+para+OpenCode+Cloud+%28clonar%2C+push+y+pull+requests%29&expires_in=90&contents=write&pull_requests=write';
+const GH_TOKEN_CLASSIC = 'https://github.com/settings/tokens/new?scopes=repo&description=OpenCode+Cloud';
+const GH_TOKENS_PAGE = 'https://github.com/settings/tokens';
+
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
@@ -755,7 +760,7 @@ function newProjectModal() {
     </div>
     <div data-pane="clone" class="hidden">
       <div class="field"><label>URL del repositorio (https)</label><input id="np-url" type="url" placeholder="https://github.com/usuario/repo.git"></div>
-      <div class="row wrap" style="margin-bottom:12px"><button class="btn small" id="np-repos">Elegir de mis repositorios</button><span class="muted" style="font-size:13px">Requiere el token de GitHub en Ajustes</span></div>
+      <div class="row wrap" style="margin-bottom:12px"><button class="btn small" id="np-repos">Elegir de mis repositorios</button><span class="muted" style="font-size:13px">Requiere el token de GitHub — <a href="#" id="np-gotoset">configurarlo</a></span></div>
       <div id="np-repolist"></div>
       <div class="field"><label>Rama (opcional)</label><input id="np-branch" type="text" placeholder="por defecto"></div>
       <div class="field"><label>Nombre del proyecto (opcional)</label><input id="np-cname" type="text" maxlength="80"></div>
@@ -793,6 +798,7 @@ function newProjectModal() {
       });
     } catch (err) { toast(err.message, 'err'); }
   });
+  $('#np-gotoset', root).addEventListener('click', (ev) => { ev.preventDefault(); m.close(); settingsModal(); });
   $('#np-name', root).focus();
 }
 
@@ -869,9 +875,14 @@ async function settingsModal(section) {
   m.body.innerHTML = `
     <h3 style="margin-top:0">GitHub</h3>
     <div id="gh-block">
-      ${gh.connected ? `<p style="margin-top:0">Conectado como <strong>${esc(gh.login)}</strong>.</p><button class="btn small danger" id="gh-remove">Desconectar</button>`
-        : `<p class="muted" style="margin-top:0">Pega un token personal (fine-grained con permisos de <em>Contents</em> y <em>Pull requests</em> sobre los repos que uses, o clásico con scope <code>repo</code>). Se guarda solo en el servidor.</p>
-        <div class="row"><input id="gh-token" type="password" placeholder="github_pat_…" autocomplete="off" class="grow"><button class="btn primary" id="gh-save">Guardar</button></div>`}
+      ${gh.connected ? `<p style="margin-top:0">Conectado como <strong>${esc(gh.login)}</strong>.</p><div class="row wrap"><button class="btn small danger" id="gh-remove">Desconectar</button><a class="btn small" href="${GH_TOKENS_PAGE}" target="_blank" rel="noopener noreferrer">Gestionar mis tokens en GitHub</a></div>`
+        : `<p style="margin-top:0">Necesitas un <strong>token de acceso personal</strong> de GitHub. No hace falta escribir tu usuario: se detecta solo a partir del token.</p>
+        <div class="row wrap" style="margin-bottom:10px">
+          <a class="btn" href="${GH_TOKEN_FINE}" target="_blank" rel="noopener noreferrer">Crear token (recomendado)</a>
+          <a class="btn" href="${GH_TOKEN_CLASSIC}" target="_blank" rel="noopener noreferrer">Crear token clásico (más rápido)</a>
+        </div>
+        <p class="muted" style="font-size:13.5px;margin:0 0 12px"><strong>Recomendado</strong> (fine-grained): se abre ya con los permisos <em>Contents</em> y <em>Pull requests</em> en lectura y escritura; solo tienes que elegir en la página los repositorios a los que dará acceso y pulsar «Generate token». <strong>Clásico</strong>: viene con el permiso <code>repo</code> marcado y da acceso a todos tus repos. GitHub muestra el token una sola vez: cópialo y pégalo aquí. Se guarda solo en tu servidor.</p>
+        <div class="row"><input id="gh-token" type="password" placeholder="github_pat_… o ghp_…" autocomplete="off" class="grow"><button class="btn primary" id="gh-save">Guardar</button></div>`}
     </div>
 
     <h3>Identidad de Git</h3>
