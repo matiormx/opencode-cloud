@@ -136,6 +136,10 @@ Cómo funciona y por qué es seguro: la WebUI no es root. Deja la petición en u
 
 Si actualizas la aplicación y `deploy/egress.sh` cambia, vuelve a ejecutar `sudo /opt/opencode-cloud/deploy/egress.sh setup` para actualizar el ayudante. Desde la versión 0.8.4 el ayudante incluye un **vigilante** (temporizador de systemd, cada minuto) que reinicia el túnel si se cae —por ejemplo si el DNS no respondía al arrancar o cambió la IP de tu casa— y vuelve a resolver el Endpoint. La WebUI muestra la configuración guardada (servidor y dirección, nunca la clave), el último handshake y un botón **Reconectar**. Ojo: mientras el túnel esté caído, OpenCode no tiene salida a internet (no hay vuelta automática a la IP del VPS); desactívalo desde Ajustes si quieres volver a salir directo. También se puede usar sin WebUI: `egress.sh install cliente.conf | on | off | status | remove`.
 
+## Ajustes
+
+**Ajustes** sigue el estilo de la app de Claude: una lista con tu cuenta y filas agrupadas (Cuenta, Aplicación, Servidor), y cada fila abre su pantalla con botón de atrás. Abajo, **Apariencia** (Claro / Oscuro / Sistema) y **Cerrar sesión**. El botón **i** muestra la versión instalada. «Servidor» (usuarios, salida a internet, actualizaciones) solo lo ve el administrador.
+
 ## Extensiones y habilidades (Context7, Playwright, skills…)
 
 **Ajustes → Extensiones** es el equivalente a los plugins de Claude Code: servidores MCP que dan herramientas extra a OpenCode. Los cambios se guardan al momento y se aplican con «Aplicar y reiniciar OpenCode». Cada usuario tiene las suyas.

@@ -14,6 +14,12 @@ const I = {
   tconn: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
   tia: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
   tpuz: '<path d="M4 9h3a2 2 0 1 0 0-4h0a2 2 0 1 1 4 0v0H9v4h-.5a2 2 0 1 1 0 4H9v5h5v-1.5a2 2 0 1 1 4 0V18h2v-5h-2a2 2 0 1 1 0-4h2V4h-5v2"/>',
+  chevr: '<path d="M9 6l6 6-6 6"/>',
+  chevl: '<path d="M15 6l-6 6 6 6"/>',
+  lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  phone: '<rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5M9 7h6M9 11h6"/>',
+  upd: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
   tusers: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M17 14c2.8 0 5 2.2 5 5"/>',
   tred: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>',
   dots: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
@@ -28,6 +34,18 @@ const I = {
   star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
   chev: '<path d="M7 10l5 5 5-5"/>',
 };
+
+// Tema: «system» sigue al dispositivo; «light» y «dark» lo fuerzan
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === 'light' || mode === 'dark') root.dataset.theme = mode; else delete root.dataset.theme;
+  root.style.colorScheme = mode === 'light' || mode === 'dark' ? mode : '';
+  const colors = { light: '#faf9f5', dark: '#262624' };
+  for (const meta of document.querySelectorAll('meta[name=theme-color]')) {
+    if (!meta.dataset.orig) meta.dataset.orig = meta.getAttribute('content');
+    meta.setAttribute('content', colors[mode] || meta.dataset.orig);
+  }
+}
 
 const store = {
   get: (k, d = null) => { try { return JSON.parse(localStorage.getItem(`occ:${k}`)) ?? d; } catch { return d; } },
@@ -64,6 +82,21 @@ document.addEventListener('click', async (e) => {
   const old = b.textContent; b.textContent = ok ? 'Copiado' : 'No se pudo'; setTimeout(() => { b.textContent = old; }, 1500);
 });
 
+applyTheme(store.get('theme', 'system'));
+
+// El teclado del móvil tapa la parte baja: las hojas se ajustan a la zona realmente visible (--vvh/--vvt)
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const syncViewport = () => {
+    const st = document.documentElement.style;
+    st.setProperty('--vvh', `${Math.round(vv.height)}px`);
+    st.setProperty('--vvt', `${Math.round(vv.offsetTop)}px`);
+  };
+  vv.addEventListener('resize', syncViewport);
+  vv.addEventListener('scroll', syncViewport);
+  syncViewport();
+}
+
 function toast(msg, kind = '') {
   // Un mismo aviso no se repite mientras sigue en pantalla (al volver de segundo plano se disparaban varios a la vez)
   if ([...document.querySelectorAll('#toasts .toast')].some((t) => t.textContent === msg)) return;
@@ -74,17 +107,21 @@ function toast(msg, kind = '') {
   setTimeout(() => el.remove(), kind === 'err' ? 6000 : 3200);
 }
 
-function openModal(title, html, { wide = false } = {}) {
+function openModal(title, html, { wide = false, bare = false } = {}) {
   const back = document.createElement('div');
   back.className = 'backdrop';
-  back.innerHTML = `<div class="modal ${wide ? 'wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-    <h2><span>${esc(title)}</span><button class="icon-btn" data-close aria-label="Cerrar">${ico(I.x)}</button></h2>
+  back.innerHTML = `<div class="modal ${wide ? 'wide' : ''}${bare ? ' bare' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    ${bare ? '' : `<h2><span>${esc(title)}</span><button class="icon-btn" data-close aria-label="Cerrar">${ico(I.x)}</button></h2>`}
     <div class="modal-body">${html}</div></div>`;
   const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
   back.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
   document.addEventListener('keydown', onKey);
+  // Con el teclado abierto, lleva el campo enfocado a la zona visible
+  back.addEventListener('focusin', (e) => {
+    if (e.target.matches?.('input:not([type=checkbox]):not([type=file]), textarea, select')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 320);
+  });
   document.body.append(back);
   return { el: back, body: $('.modal-body', back), close };
 }
@@ -1433,7 +1470,7 @@ function newProjectModal() {
       });
     } catch (err) { toast(err.message, 'err'); }
   });
-  $('#np-gotoset', root).addEventListener('click', (ev) => { ev.preventDefault(); m.close(); settingsModal(); });
+  $('#np-gotoset', root).addEventListener('click', (ev) => { ev.preventDefault(); m.close(); settingsModal('conn'); });
   $('#np-name', root).focus();
 }
 
@@ -1467,7 +1504,8 @@ function projectMenuModal(id) {
 
 /* ============================== Ajustes y actualizaciones ============================== */
 async function settingsModal(section) {
-  const m = openModal('Ajustes', '<p class="muted">Cargando…</p>', { wide: true });
+  const m = openModal('Ajustes', '<p class="muted">Cargando…</p>', { wide: true, bare: true });
+  m.el.querySelector('.modal').insertAdjacentHTML('afterbegin', `<div class="sethead"><button type="button" class="cbtn" data-sback aria-label="Cerrar">${ico(I.x, 'width="22" height="22"')}</button><div class="settitle">Ajustes</div><button type="button" class="cbtn" data-sinfo aria-label="Acerca de"><span class="ibig">i</span></button></div>`);
   const usersP = state.multiuser ? api('GET', '/api/users').catch(() => null) : Promise.resolve(null);
   const [settings, gh, oc, upd, models, eg0] = await Promise.all([
     api('GET', '/api/settings'),
@@ -1597,13 +1635,37 @@ async function settingsModal(section) {
       </details>`;
   };
 
-  const tabs = [['conn', 'Conexiones', I.tconn], ['ia', 'IA y OpenCode', I.tia], ['ext', 'Extensiones', I.tpuz], ...(canAdmin ? [['users', 'Usuarios', I.tusers], ['red', 'Red', I.tred]] : []), ['sys', canAdmin ? 'Sistema' : 'Cuenta', I.gear]];
-  const secTab = { update: 'sys', egress: 'red', users: 'users' };
-  let curTab = secTab[section] || store.get('settingsTab');
-  if (!tabs.some(([k]) => k === curTab)) curTab = 'conn';
+  const viewTitles = { conn: 'Conexiones', ia: 'IA y OpenCode', ext: 'Extensiones', sk: 'Habilidades', users: 'Usuarios', red: 'Salida a internet', upd: 'Actualizaciones', app: 'Aplicación', pw: 'Contraseña' };
+  const legacy = { update: 'upd', egress: 'red' };
+  let curView = legacy[section] || (viewTitles[section] ? section : 'main');
+  if ((curView === 'users' || curView === 'red' || curView === 'upd') && !canAdmin) curView = 'main';
+
+  const mainHtml = () => {
+    const R = (k, icon, label, val = '', hot = false) => `<button type="button" class="srow" data-go="${k}"><span class="si">${ico(icon, 'width="22" height="22"')}</span><span class="sl">${label}</span>${val ? `<span class="sv${hot ? ' hot' : ''}">${esc(val)}</span>` : ''}<span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></button>`;
+    const me = state.multiuser && state.me ? state.me : null;
+    const title = me ? me.name : (gh.connected ? gh.login : 'OpenCode Cloud');
+    const sub = me ? (me.role === 'admin' ? 'Administrador' : 'Usuario') : (gh.connected ? 'GitHub conectado' : 'GitHub sin conectar');
+    const u = state.update;
+    const theme = store.get('theme', 'system');
+    const egVal = !eg ? '' : !eg.helper ? 'Sin ayudante' : eg.active ? 'Activa' : eg.configured ? 'Desactivada' : 'Sin configurar';
+    const usersVal = settings.canManageUsers ? String(usersData?.users?.length ?? '') : 'Desactivado';
+    return `
+      <button type="button" class="scard acct" data-go="conn"><span class="avatar">${esc((title || '?').slice(0, 1).toUpperCase())}</span><span class="acct-t"><strong>${esc(title)}</strong><span class="muted">${esc(sub)}</span></span><span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></button>
+      <div class="sgl">Cuenta</div>
+      <div class="scard">${R('conn', I.tconn, 'Conexiones', gh.connected ? gh.login : 'Sin conectar')}${R('pw', I.lock, 'Contraseña')}</div>
+      <div class="sgl">Aplicación</div>
+      <div class="scard">${R('ia', I.tia, 'IA y OpenCode', oc.healthy ? (oc.version ? `v${oc.version}` : '') : 'No responde')}${R('ext', I.tpuz, 'Extensiones')}${R('sk', I.book, 'Habilidades')}</div>
+      ${canAdmin ? `<div class="sgl">Servidor</div>
+      <div class="scard">${R('users', I.tusers, 'Usuarios', usersVal)}${R('red', I.tred, 'Salida a internet', egVal)}${R('upd', I.upd, 'Actualizaciones', u?.behind ? `${u.behind} nueva${u.behind > 1 ? 's' : ''}` : (u?.version ? `v${u.version}` : ''), Boolean(u?.behind))}</div>` : ''}
+      <div class="scard" style="margin-top:22px">${R('app', I.phone, 'Instalar aplicación', isStandalone() ? 'Instalada' : '')}</div>
+      <div class="sgl">Apariencia</div>
+      <div class="themes">${[['light', 'Claro'], ['dark', 'Oscuro'], ['system', 'Sistema']].map(([k, l]) => `<button type="button" class="theme-opt${theme === k ? ' on' : ''}" data-theme-set="${k}"><span class="tp ${k}"></span><span>${l}</span></button>`).join('')}</div>
+      <div class="scard" style="margin-top:22px"><button type="button" class="srow danger" data-logout><span class="si">${ico(I.logout, 'width="22" height="22"')}</span><span class="sl">Cerrar sesión</span></button></div>`;
+  };
+
   m.body.innerHTML = `
-    <div class="tabbar" role="tablist" aria-label="Secciones de ajustes">${tabs.map(([k, l, ic]) => `<button type="button" role="tab" class="tabbtn${k === curTab ? ' on' : ''}" data-tab="${k}" aria-selected="${k === curTab}" aria-label="${l}" title="${l}">${ico(ic, 'width="21" height="21"')}<span class="tl">${l}</span></button>`).join('')}<button type="button" class="tabtoggle" aria-label="Mostrar nombres de las secciones" title="Mostrar nombres">${ico(I.chev, 'width="18" height="18"')}</button></div>
-    <div class="tabpane" data-pane="conn"${curTab === 'conn' ? '' : ' hidden'}>
+    <div class="tabpane" data-pane="main"${curView === 'main' ? '' : ' hidden'}>${mainHtml()}</div>
+    <div class="tabpane" data-pane="conn"${curView === 'conn' ? '' : ' hidden'}>
     <h3 style="margin-top:0">GitHub</h3>
     <div id="gh-block">
       ${gh.connected ? `<p style="margin-top:0">Conectado como <strong>${esc(gh.login)}</strong>.</p><div class="row wrap"><button class="btn small danger" id="gh-remove">Desconectar</button><a class="btn small" href="${GH_TOKENS_PAGE}" target="_blank" rel="noopener noreferrer">Gestionar mis tokens en GitHub</a></div>`
@@ -1620,7 +1682,7 @@ async function settingsModal(section) {
     <div class="row wrap"><input id="g-name" type="text" class="grow" value="${esc(settings.gitName)}" placeholder="Nombre"><input id="g-email" type="email" class="grow" value="${esc(settings.gitEmail)}" placeholder="correo"><button class="btn" id="g-save">Guardar</button></div>
 
     </div>
-    <div class="tabpane" data-pane="ia"${curTab === 'ia' ? '' : ' hidden'}>
+    <div class="tabpane" data-pane="ia"${curView === 'ia' ? '' : ' hidden'}>
     <h3 style="margin-top:0">Proveedores de IA</h3>
     <p class="muted" style="margin-top:0">Añade una API key para que aparezcan sus modelos en el selector. Con «Visible» desactivado, un proveedor sigue conectado pero sus modelos no salen en la lista.</p>
     ${(() => {
@@ -1644,31 +1706,38 @@ async function settingsModal(section) {
     <div id="oc-logbox"></div>
     </div>
 
-    <div class="tabpane" data-pane="ext"${curTab === 'ext' ? '' : ' hidden'}>
-    <h3 style="margin-top:0">Extensiones</h3>
-    <p class="muted" style="margin-top:0">Dan herramientas y conocimientos extra a OpenCode: servidores MCP y skills. Es lo equivalente a los plugins de Claude Code.</p>
+    <div class="tabpane" data-pane="ext"${curView === 'ext' ? '' : ' hidden'}>
+    <p class="muted" style="margin-top:0">Servidores MCP que dan herramientas extra a OpenCode (documentación al día, navegador…). Es lo equivalente a los plugins de Claude Code.</p>
     <div id="ext-block"><p class="muted">Cargando…</p></div>
     </div>
 
-    ${canAdmin ? `<div class="tabpane" data-pane="users"${curTab === 'users' ? '' : ' hidden'}>` : ''}
-    ${usersData || settings.canManageUsers ? `<h3 id="sec-users" style="margin-top:0">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : (canAdmin ? `<h3 id="sec-users">Usuarios</h3><div class="hint">El modo multiusuario no está activado. Para poder crear usuarios con su propio espacio, ejecuta una vez por SSH en el VPS:${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}y vuelve a abrir los ajustes. (Requiere haber actualizado antes a la v0.8.0 o superior.)</div>` : '')}
+    <div class="tabpane" data-pane="sk"${curView === 'sk' ? '' : ' hidden'}>
+    <div id="sk-block"><p class="muted">Cargando…</p></div>
+    </div>
+
+    ${canAdmin ? `<div class="tabpane" data-pane="users"${curView === 'users' ? '' : ' hidden'}>` : ''}
+    ${usersData || settings.canManageUsers ? `<h3 id="sec-users" class="t-dup">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : (canAdmin ? `<h3 id="sec-users" class="t-dup">Usuarios</h3><div class="hint">El modo multiusuario no está activado. Para poder crear usuarios con su propio espacio, ejecuta una vez por SSH en el VPS:${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}y vuelve a abrir los ajustes. (Requiere haber actualizado antes a la v0.8.0 o superior.)</div>` : '')}
 
     ${canAdmin ? `</div>
-    <div class="tabpane" data-pane="red"${curTab === 'red' ? '' : ' hidden'}>
-    <h3 id="sec-egress" style="margin-top:0">Salida a internet (WireGuard)</h3>
+    <div class="tabpane" data-pane="red"${curView === 'red' ? '' : ' hidden'}>
+    <h3 id="sec-egress" class="t-dup">Salida a internet (WireGuard)</h3>
     <div id="eg-block">${egressBlock()}</div>
     </div>` : ''}
 
-    <div class="tabpane" data-pane="sys"${curTab === 'sys' ? '' : ' hidden'}>
-    ${canAdmin ? `<h3 id="sec-update" style="margin-top:0">Actualizaciones de esta aplicación</h3>
-    <div id="upd-block">${updateBlock()}</div>` : ''}
+    ${canAdmin ? `<div class="tabpane" data-pane="upd"${curView === 'upd' ? '' : ' hidden'}>
+    <h3 id="sec-update" class="t-dup">Actualizaciones de esta aplicación</h3>
+    <div id="upd-block">${updateBlock()}</div></div>` : ''}
 
-    <h3${canAdmin ? '' : ' style="margin-top:0"'}>Aplicación</h3>
+    <div class="tabpane" data-pane="app"${curView === 'app' ? '' : ' hidden'}>
     <div id="app-block">${appBlock()}</div>
+    </div>
 
-    <h3>Seguridad</h3>
-    <div class="row wrap"><input id="pw-cur" type="password" class="grow" placeholder="Contraseña actual" autocomplete="current-password"><input id="pw-new" type="password" class="grow" placeholder="Nueva (mín. 8)" autocomplete="new-password"><button class="btn" id="pw-save">Cambiar</button></div>
+    <div class="tabpane" data-pane="pw"${curView === 'pw' ? '' : ' hidden'}>
+    <div id="pw-slot"></div>
     </div>`;
+
+  const pwHtml = `<p class="muted" style="margin-top:0">Cambia la contraseña con la que entras a esta WebUI.</p>
+    <div class="row wrap"><input id="pw-cur" type="password" class="grow" placeholder="Contraseña actual" autocomplete="current-password"><input id="pw-new" type="password" class="grow" placeholder="Nueva (mín. 8)" autocomplete="new-password"><button class="btn" id="pw-save">Cambiar</button></div>`;
 
   const q = (s) => $(s, m.el);
   const click = (sel, fn) => q(sel)?.addEventListener('click', async (e) => { try { await fn(e.target); } catch (err) { toast(err.message, 'err'); } });
@@ -1797,8 +1866,8 @@ async function settingsModal(section) {
   };
   usersBind();
 
-  click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.close(); settingsModal(); });
-  click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.close(); settingsModal(); });
+  click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.close(); settingsModal('conn'); });
+  click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.close(); settingsModal('conn'); });
   click('#g-save', async () => { await api('PUT', '/api/settings', { gitName: q('#g-name').value, gitEmail: q('#g-email').value }); toast('Identidad guardada (se aplica a nuevos commits)'); });
   m.el.querySelectorAll('[data-prov-vis]').forEach((cb) => cb.addEventListener('change', async () => {
     const prev = state.models.hidden || [];
@@ -1812,7 +1881,7 @@ async function settingsModal(section) {
     if (!confirm(`¿Quitar la clave de ${b.dataset.provName}? Sus modelos dejarán de aparecer.`)) return;
     try {
       await busyBtn(b, 'Quitando…', () => api('DELETE', `/api/providers/${encodeURIComponent(b.dataset.provDel)}`));
-      toast('Clave eliminada'); await loadModels(); renderModels(); m.close(); settingsModal();
+      toast('Clave eliminada'); await loadModels(); renderModels(); m.close(); settingsModal('ia');
     } catch (err) { toast(err.message, 'err'); }
   }));
   const showProvHelp = () => { q('#prov-help').innerHTML = providerHelpHtml(q('#prov-id').value); };
@@ -1824,13 +1893,12 @@ async function settingsModal(section) {
     toast('Clave guardada');
     await loadModels();
     renderModels();
-    m.close(); settingsModal();
+    m.close(); settingsModal('ia');
   });
   click('#oc-restart', async (b) => { if (!(await confirmInterrupt('Se reiniciará OpenCode. ¿Continuar?'))) return; await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart')); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
   click('#oc-upgrade', async (b) => { if (!(await confirmInterrupt('Se actualizará OpenCode y se reiniciará. ¿Continuar?'))) return; const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });
   click('#oc-logs', async () => { const r = await api('GET', '/api/opencode/status'); q('#oc-logbox').innerHTML = `<div class="output">${esc((r.logs || []).join('\n') || 'Sin salida todavía')}</div>`; });
   click('#app-install', async () => { await installApp(); $('#app-block', m.el).innerHTML = appBlock(); });
-  click('#pw-save', async (b) => { await busyBtn(b, 'Guardando…', () => api('PUT', '/api/password', { current: q('#pw-cur').value, next: q('#pw-new').value })); toast('Contraseña cambiada'); q('#pw-cur').value = ''; q('#pw-new').value = ''; });
 
   /* ---- Extensiones (MCP): Context7, Playwright y propias ---- */
   let ext = null;
@@ -1866,7 +1934,7 @@ async function settingsModal(section) {
     return `${err}<p class="muted" style="margin:0 0 8px">Hay que instalar Chromium y sus librerías (unos 400 MB y varios minutos). Se instala una vez para todos los usuarios.</p><button class="btn primary" data-x="browser-install">Instalar Chromium</button>`;
   };
   const skillsBlock = () => {
-    if (!sk) return '';
+    if (!sk) return '<p class="muted">No se pudo cargar la lista.</p>';
     const srcs = [...new Set(sk.items.map((s) => s.source).filter(Boolean))];
     const rows = sk.items.map((s) => `<div class="ext-row"><div class="grow" style="min-width:0"><strong>${esc(s.name)}</strong> <span class="chip">${s.source ? esc(s.source) : 'manual'}</span><div class="muted sk-desc">${esc(s.description)}</div></div><button class="btn small danger" data-x="sk-del" data-name="${esc(s.name)}">Quitar</button></div>`).join('');
     const found = skFound ? `<div class="ext-card" style="margin-top:10px"><div style="margin-bottom:6px"><strong>${esc(skFound.repo)}</strong> <span class="chip">${esc(skFound.sha || '')}</span></div>
@@ -1875,24 +1943,24 @@ async function settingsModal(section) {
         <p class="muted" style="font-size:12.5px;margin:8px 0">Una skill son instrucciones que seguirá el modelo: instala solo las de repositorios en los que confíes.</p>
         <div class="row wrap"><button class="btn primary" data-x="sk-install">Instalar seleccionadas (${skFound.sel.size})</button><button class="btn ghost" data-x="sk-cancel">Cancelar</button></div></div>` : '';
     return `
-      <h3>Habilidades (skills)</h3>
       <p class="muted" style="margin-top:0">Guías que OpenCode carga solo cuando la tarea las necesita (por ejemplo, principios de diseño). Se descargan de GitHub y quedan en tu espacio.</p>
       ${rows ? `<div class="ext-card" style="padding-top:2px;padding-bottom:2px">${rows}</div>` : '<p class="muted">Todavía no hay ninguna instalada.</p>'}
       ${srcs.length ? `<div class="row wrap" style="margin-bottom:10px">${srcs.map((r) => `<button class="btn small" data-x="sk-update" data-repo="${esc(r)}">Actualizar de ${esc(r)}</button>`).join('')}</div>` : ''}
-      <div class="row wrap"><input id="sk-repo" type="text" class="grow" placeholder="usuario/repositorio" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(skRepo)}"><button class="btn" data-x="sk-find">Buscar</button></div>
+      <div class="row wrap"><input id="sk-repo" name="skill-source-field" type="text" class="grow" inputmode="url" enterkeyhint="search" placeholder="usuario/repositorio" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" value="${esc(skRepo)}"><button class="btn" data-x="sk-find">Buscar</button></div>
       <div class="row wrap" style="margin-top:6px"><button class="btn small ghost" data-x="sk-fill" data-repo="emilkowalski/skills">Ejemplo: emilkowalski/skills (diseño y animación)</button></div>
       ${found}`;
   };
+  const restartBanner = () => (ext?.restartNeeded || sk?.restartNeeded ? '<div class="banner" style="margin-bottom:12px"><strong>Hay cambios sin aplicar.</strong> OpenCode debe reiniciarse para usarlos.<div class="row" style="margin-top:8px"><button class="btn primary small" data-x="apply">Aplicar y reiniciar OpenCode</button></div></div>' : '');
   const extBlock = () => {
     if (!ext) return '<p class="muted">Cargando…</p>';
     const c7 = ext.context7;
     const pw = ext.playwright;
     const customRows = ext.custom.map((c) => `<div class="ext-row"><div class="grow" style="min-width:0"><strong>${esc(c.name)}</strong> <span class="chip">${c.type === 'remote' ? 'remota' : 'local'}</span> ${extStatus(c.name)}<div class="muted mono ext-target">${esc(c.target)}</div>${c.headerNames.length || c.envNames.length ? `<div class="muted" style="font-size:12px">${c.headerNames.length ? `Cabeceras: ${c.headerNames.map(esc).join(', ')}` : ''}${c.envNames.length ? ` Variables: ${c.envNames.map(esc).join(', ')}` : ''}</div>` : ''}${extFail(c.name)}</div>${extSwitch(`custom:${c.id}`, c.enabled, 'Activa')}<button class="btn small danger" data-x="custom-del" data-id="${esc(c.id)}" data-name="${esc(c.name)}">Quitar</button></div>`).join('');
     return `
-      ${ext.restartNeeded || sk?.restartNeeded ? '<div class="banner" style="margin-bottom:12px"><strong>Hay cambios sin aplicar.</strong> OpenCode debe reiniciarse para usarlos.<div class="row" style="margin-top:8px"><button class="btn primary small" data-x="apply">Aplicar y reiniciar OpenCode</button></div></div>' : ''}
+      ${restartBanner()}
       <div class="ext-card">
         <div class="row" style="gap:8px;align-items:center"><div class="grow"><strong>Context7</strong> ${extStatus('context7')}<div class="muted" style="font-size:13px">Documentación actualizada de librerías y frameworks, para que OpenCode no use APIs antiguas.</div></div>${extSwitch('context7', c7.enabled)}</div>
-        <div class="row wrap" style="margin-top:10px"><input id="c7-key" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="${c7.hasKey ? 'Clave guardada · escribe para cambiar' : 'Clave de Context7 (opcional, más límite)'}"><button class="btn" data-x="c7-save">Guardar</button>${c7.hasKey ? '<button class="btn danger" data-x="c7-clear">Quitar clave</button>' : ''}</div>
+        <div class="row wrap" style="margin-top:10px"><input id="c7-key" name="docs-key-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="${c7.hasKey ? 'Clave guardada · escribe para cambiar' : 'Clave de Context7 (opcional, más límite)'}"><button class="btn" data-x="c7-save">Guardar</button>${c7.hasKey ? '<button class="btn danger" data-x="c7-clear">Quitar clave</button>' : ''}</div>
         ${extFail('context7')}
       </div>
       <div class="ext-card">
@@ -1904,19 +1972,20 @@ async function settingsModal(section) {
       ${customRows ? `<div class="ext-card" style="padding-top:2px;padding-bottom:2px">${customRows}</div>` : '<p class="muted" style="margin-top:0">Añade cualquier servidor MCP: remoto (una URL) o local (un comando que se ejecuta en tu espacio).</p>'}
       <details class="nu-box" id="ext-new" ${extDraft.open ? 'open' : ''}><summary>Añadir una extensión</summary>
         <div class="stack" style="margin-top:10px">
-          <input id="xn-name" type="text" placeholder="Nombre (p. ej. github, notion)" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(extDraft.name)}">
+          <input id="xn-name" name="ext-label-field" type="text" placeholder="Nombre (p. ej. github, notion)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" value="${esc(extDraft.name)}">
           <select id="xn-type"><option value="remote"${extDraft.type === 'remote' ? ' selected' : ''}>Remota (URL)</option><option value="local"${extDraft.type === 'local' ? ' selected' : ''}>Local (comando)</option></select>
-          <div id="xn-remote"${extDraft.type === 'remote' ? '' : ' hidden'} class="stack"><input id="xn-url" type="url" placeholder="https://servidor.ejemplo.com/mcp" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(extDraft.url)}"><textarea id="xn-headers" rows="2" placeholder="Cabeceras, una por línea:&#10;Authorization: Bearer …" autocapitalize="off" spellcheck="false">${esc(extDraft.headers)}</textarea></div>
-          <div id="xn-local"${extDraft.type === 'local' ? '' : ' hidden'} class="stack"><input id="xn-command" type="text" placeholder="npx -y @paquete/servidor-mcp" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(extDraft.command)}"><textarea id="xn-env" rows="2" placeholder="Variables, una por línea:&#10;CLAVE=valor" autocapitalize="off" spellcheck="false">${esc(extDraft.env)}</textarea></div>
+          <div id="xn-remote"${extDraft.type === 'remote' ? '' : ' hidden'} class="stack"><input id="xn-url" name="ext-address-field" type="url" placeholder="https://servidor.ejemplo.com/mcp" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" value="${esc(extDraft.url)}"><textarea id="xn-headers" rows="2" placeholder="Cabeceras, una por línea:&#10;Authorization: Bearer …" autocapitalize="off" spellcheck="false">${esc(extDraft.headers)}</textarea></div>
+          <div id="xn-local"${extDraft.type === 'local' ? '' : ' hidden'} class="stack"><input id="xn-command" name="ext-command-field" type="text" placeholder="npx -y @paquete/servidor-mcp" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" value="${esc(extDraft.command)}"><textarea id="xn-env" rows="2" placeholder="Variables, una por línea:&#10;CLAVE=valor" autocapitalize="off" spellcheck="false">${esc(extDraft.env)}</textarea></div>
           <button class="btn primary" data-x="custom-add">Añadir</button>
         </div>
-      </details>
-      ${skillsBlock()}`;
+      </details>`;
   };
   const drawExt = () => {
     const box = q('#ext-block');
     if (!box) return;
     box.innerHTML = extBlock();
+    const sb = q('#sk-block');
+    if (sb) sb.innerHTML = `${restartBanner()}${skillsBlock()}`;
     clearTimeout(extTimer);
     // Mientras se instala Chromium se consulta el progreso
     if (ext?.playwright?.browser?.installing && m.el.isConnected) extTimer = setTimeout(() => loadExt(true), 3000);
@@ -1928,21 +1997,23 @@ async function settingsModal(section) {
       const [e, k] = await Promise.all([api('GET', '/api/extensions'), api('GET', '/api/skills').catch(() => sk)]);
       ext = e; sk = k; drawExt();
     }
-    catch (err) { if (!quiet) q('#ext-block').innerHTML = `<div class="banner err">${esc(err.message)}</div>`; }
+    catch (err) { if (!quiet) { const e = `<div class="banner err">${esc(err.message)}</div>`; q('#ext-block').innerHTML = e; q('#sk-block').innerHTML = e; } }
     finally { extLoading = false; }
   };
   const extDo = async (btn, label, method, url, body) => {
     try { ext = await busyBtn(btn, label, () => api(method, url, body)); drawExt(); return true; }
     catch (err) { toast(err.message, 'err'); await loadExt(true); return false; }
   };
-  const extBox = q('#ext-block');
-  extBox?.addEventListener('input', (e) => {
+  const extBox = m.body;
+  extBox.addEventListener('input', (e) => {
+    if (!e.target.closest('#ext-block, #sk-block')) return;
     const map = { 'xn-name': 'name', 'xn-url': 'url', 'xn-command': 'command', 'xn-headers': 'headers', 'xn-env': 'env' };
     if (map[e.target.id]) extDraft[map[e.target.id]] = e.target.value;
     if (e.target.id === 'sk-repo') skRepo = e.target.value;
   });
-  extBox?.addEventListener('toggle', (e) => { if (e.target.id === 'ext-new') extDraft.open = e.target.open; }, true);
-  extBox?.addEventListener('change', async (e) => {
+  extBox.addEventListener('toggle', (e) => { if (e.target.id === 'ext-new') extDraft.open = e.target.open; }, true);
+  extBox.addEventListener('change', async (e) => {
+    if (!e.target.closest('#ext-block, #sk-block')) return;
     if (e.target.id === 'xn-type') {
       extDraft.type = e.target.value;
       q('#xn-remote').hidden = extDraft.type !== 'remote';
@@ -1963,8 +2034,8 @@ async function settingsModal(section) {
         : await extDo(e.target, '', 'PUT', `/api/extensions/custom/${key.slice(7)}`, { enabled: on });
     if (!ok) drawExt();
   });
-  extBox?.addEventListener('click', async (e) => {
-    const b = e.target.closest('[data-x]');
+  extBox.addEventListener('click', async (e) => {
+    const b = e.target.closest('#ext-block [data-x], #sk-block [data-x]');
     if (!b) return;
     const act = b.dataset.x;
     try {
@@ -2026,23 +2097,46 @@ async function settingsModal(section) {
       }
     } catch (err) { toast(err.message, 'err'); }
   });
-  if (curTab === 'ext') loadExt();
+  if (curView === 'ext' || curView === 'sk') loadExt();
 
-  const showTab = (k) => {
-    for (const b of m.el.querySelectorAll('.tabbtn')) { const on = b.dataset.tab === k; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }
+  const head = m.el.querySelector('.sethead');
+  const drawMain = () => { const pn = m.el.querySelector('[data-pane=main]'); if (pn) pn.innerHTML = mainHtml(); };
+  const openView = (k) => {
+    if (k === 'main') drawMain();
+    curView = k;
+    const slot = q('#pw-slot'); if (slot) slot.innerHTML = k === 'pw' ? pwHtml : '';
     for (const pn of m.el.querySelectorAll('.tabpane')) pn.hidden = pn.dataset.pane !== k;
-    store.set('settingsTab', k);
-    if (k === 'ext' && !ext) loadExt();
+    head.querySelector('.settitle').textContent = k === 'main' ? 'Ajustes' : viewTitles[k];
+    const back = head.querySelector('[data-sback]');
+    back.innerHTML = ico(k === 'main' ? I.x : I.chevl, 'width="22" height="22"');
+    back.setAttribute('aria-label', k === 'main' ? 'Cerrar' : 'Atrás');
+    head.querySelector('[data-sinfo]').style.visibility = k === 'main' ? 'visible' : 'hidden';
+    if ((k === 'ext' || k === 'sk') && !ext) loadExt(); else if (k === 'ext' || k === 'sk') drawExt();
     $('.modal-body', m.el).scrollTop = 0;
-    m.el.querySelector('.tabbtn.on')?.scrollIntoView({ inline: 'center', block: 'nearest' });
   };
-  setTimeout(() => m.el.querySelector('.tabbtn.on')?.scrollIntoView({ inline: 'center', block: 'nearest' }), 0);
-  m.el.querySelector('.tabbar')?.addEventListener('click', (e) => {
-    const bar = e.currentTarget;
-    if (e.target.closest('.tabtoggle')) { bar.classList.toggle('open'); return; }
-    const b = e.target.closest('.tabbtn'); if (b) { showTab(b.dataset.tab); bar.classList.remove('open'); }
+  openView(curView);
+  m.el.addEventListener('click', async (e) => {
+    const pwb = e.target.closest('#pw-save');
+    if (pwb) {
+      try { await busyBtn(pwb, 'Guardando…', () => api('PUT', '/api/password', { current: q('#pw-cur').value, next: q('#pw-new').value })); toast('Contraseña cambiada'); q('#pw-cur').value = ''; q('#pw-new').value = ''; } catch (err) { toast(err.message, 'err'); }
+      return;
+    }
+    const go = e.target.closest('[data-go]');
+    if (go) return openView(go.dataset.go);
+    if (e.target.closest('[data-sback]')) return curView === 'main' ? m.close() : openView('main');
+    const th = e.target.closest('[data-theme-set]');
+    if (th) { store.set('theme', th.dataset.themeSet); applyTheme(th.dataset.themeSet); drawMain(); return; }
+    if (e.target.closest('[data-logout]')) { try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ } m.close(); showLogin(); return; }
+    if (e.target.closest('[data-sinfo]')) {
+      const u = state.update;
+      const about = openModal('Acerca de', `<div class="stack">
+        <div>Versión de la aplicación: <strong>${esc(u?.version || '—')}</strong> ${u?.sha ? `<span class="chip">${esc(u.sha)}</span>` : ''}</div>
+        ${u?.branch ? `<div class="muted">Rama de actualización: <code>${esc(u.branch)}</code></div>` : ''}
+        <div>OpenCode: <strong>${esc(oc.version || (oc.healthy ? 'en marcha' : 'no responde'))}</strong></div>
+        <div class="muted" style="font-size:13px">OpenCode Cloud: OpenCode en tu VPS con una interfaz web móvil, proyectos, GitHub y actualizaciones desde la propia WebUI.</div></div>`);
+      about.el.style.zIndex = 60;
+    }
   });
-  if (['update', 'egress', 'users'].includes(section)) setTimeout(() => q(`#sec-${section}`)?.scrollIntoView({ behavior: 'smooth' }), 50);
 }
 
 function afterRestart(result, message, modal) {
