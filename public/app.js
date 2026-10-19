@@ -176,7 +176,7 @@ function openModal(title, html, { wide = false, bare = false } = {}) {
   document.addEventListener('keydown', onKey);
   // Con el teclado abierto, lleva el campo enfocado a la zona visible
   back.addEventListener('focusin', (e) => {
-    if (e.target.matches?.('input:not([type=checkbox]):not([type=file]), textarea, select')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 320);
+    if (e.target.matches?.('input:not([type=checkbox]):not([type=file]), textarea, select, .pf')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 320);
   });
 
   // Arrastrar la hoja hacia abajo para cerrarla: 1:1 con el dedo, y al soltar se proyecta el impulso (apple-design §2, §5, §6)
@@ -1322,28 +1322,74 @@ async function submitInput() {
 /* El cuadro del chat es un editable de texto plano, no un <textarea>: iOS ofrece el código de verificación
    y las contraseñas guardadas del sitio en cualquier campo de formulario, pero no en un editable.
    Mantiene la interfaz de un campo (value, placeholder, focus) para el resto del código. */
-function textboxShim(el) {
+function textboxShim(el, { line = false } = {}) {
   if (!el || el.dataset.shim) return;
   el.dataset.shim = '1';
   el.contentEditable = 'plaintext-only';
   if (el.contentEditable !== 'plaintext-only') el.contentEditable = 'true'; // iOS antiguo
-  const sync = () => {
-    if (!el.textContent) el.replaceChildren(); // sin <br> residual: así funciona el :empty
-  };
-  Object.defineProperty(el, 'value', {
-    get: () => el.innerText.replace(/\n$/, ''),
-    set: (v) => { el.textContent = v; },
-  });
+  const max = Number(el.getAttribute('maxlength')) || 0;
+  const clean = (t) => (line ? t.replace(/[\r\n]+/g, '') : t);
+  const read = () => clean(line ? el.textContent : el.innerText.replace(/\n$/, ''));
+  Object.defineProperty(el, 'value', { get: read, set: (v) => { el.textContent = clean(String(v ?? '')); } });
   Object.defineProperty(el, 'placeholder', { get: () => el.dataset.placeholder || '', set: (v) => { el.dataset.placeholder = v; } });
-  el.addEventListener('input', sync);
+  Object.defineProperty(el, 'disabled', { get: () => el.contentEditable === 'false', set: (v) => { el.contentEditable = v ? 'false' : 'plaintext-only'; } });
+  el.select = () => { const r = document.createRange(); r.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); };
+  const caretToEnd = () => { const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); };
+  el.addEventListener('input', () => {
+    if (!el.textContent) el.replaceChildren(); // sin <br> residual: así funciona el :empty
+    else if (max && read().length > max) { el.textContent = read().slice(0, max); caretToEnd(); }
+  });
+  if (line) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
   // Pegar siempre como texto plano (también en navegadores sin plaintext-only)
   el.addEventListener('paste', (e) => {
     if (e.defaultPrevented || e.clipboardData?.files?.length) return;
     const t = e.clipboardData?.getData('text/plain');
     if (t == null) return;
     e.preventDefault();
-    document.execCommand('insertText', false, t);
+    let txt = clean(t);
+    if (max) txt = txt.slice(0, Math.max(0, max - read().length));
+    document.execCommand('insertText', false, txt);
   });
+}
+
+/* Campos de texto como editables de texto plano. iOS ofrece contraseñas y códigos de verificación guardados
+   en cualquier input/textarea del sitio; en un editable no. Se convierten al insertar HTML (de forma síncrona,
+   antes de que el código enlace eventos) y mantienen value, placeholder, disabled, select() y focus().
+   Quedan como input real: contraseñas, usuario, y todo lo que está dentro de un <form> (inicio de sesión). */
+const PF_KEEP_AC = /^(username|current-password|new-password|one-time-code)$/;
+function plainFieldize(root) {
+  for (const el of root.querySelectorAll('input,textarea')) {
+    const area = el.tagName === 'TEXTAREA';
+    const t = (el.getAttribute('type') || 'text').toLowerCase();
+    if (!area && !['text', 'url', 'email', 'search'].includes(t)) continue;
+    if (PF_KEEP_AC.test(el.getAttribute('autocomplete') || '') || el.closest('form')) continue;
+    const d = document.createElement('div');
+    for (const a of el.attributes) {
+      if (['type', 'value', 'placeholder', 'name', 'autocomplete', 'list', 'rows', 'autofocus'].includes(a.name)) continue;
+      d.setAttribute(a.name, a.value);
+    }
+    d.classList.add('pf', area ? 'pf-area' : 'pf-line');
+    d.setAttribute('role', 'textbox');
+    if (area) { d.setAttribute('aria-multiline', 'true'); d.style.minHeight = `calc(${Number(el.getAttribute('rows')) || 2} * 1.45em + 20px)`; }
+    d.dataset.placeholder = el.getAttribute('placeholder') || '';
+    for (const [k, v] of Object.entries(FIELD_HINTS[el.id] || {})) d.setAttribute(k, v);
+    if (!d.hasAttribute('autocapitalize') && !area) d.setAttribute('autocapitalize', 'none');
+    if (!d.hasAttribute('inputmode') && (t === 'url' || t === 'email')) d.setAttribute('inputmode', t);
+    if (t === 'search' && !d.hasAttribute('enterkeyhint')) d.setAttribute('enterkeyhint', 'search');
+    d.textContent = area ? el.value : (el.getAttribute('value') || '');
+    textboxShim(d, { line: !area });
+    el.replaceWith(d);
+    if (el.hasAttribute('autofocus')) setTimeout(() => d.focus(), 0);
+  }
+}
+{
+  const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+  Object.defineProperty(Element.prototype, 'innerHTML', {
+    ...desc,
+    set(v) { desc.set.call(this, v); if (typeof v === 'string' && /<(input|textarea)/i.test(v)) plainFieldize(this); },
+  });
+  const ins = Element.prototype.insertAdjacentHTML;
+  Element.prototype.insertAdjacentHTML = function (pos, html) { ins.call(this, pos, html); if (/<(input|textarea)/i.test(html)) plainFieldize(this.parentElement || this); };
 }
 
 function autosize(el) {

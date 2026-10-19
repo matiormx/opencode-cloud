@@ -338,7 +338,7 @@ hr.sep { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 /* ---------- App instalada (PWA) ---------- */
 @media (display-mode: standalone) {
   body { user-select: none; -webkit-user-select: none; }
-  .msg, .tool pre, pre.code, input, textarea, .output, .files, .log { user-select: text; -webkit-user-select: text; }
+  .msg, .tool pre, pre.code, input, textarea, .pf, .output, .files, .log { user-select: text; -webkit-user-select: text; }
 }
 
 /* Campos secretos (API keys/tokens): texto enmascarado sin activar el gestor de contraseñas */
@@ -607,3 +607,19 @@ button, [role=button], summary, .srow, .sess, .chip, .theme-opt, .cbtn, .icon-bt
 }
 /* Zonas con gesto propio (arrastrar para cerrar): el navegador no debe quedarse con el gesto */
 .sethead, .modal > h2, .modal .grab { touch-action: none; }
+
+/* Campos de texto plano (ver plainFieldize): misma apariencia que un input */
+.pf { display: block; width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); font-size: 16px; line-height: 1.45; outline: none; user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; cursor: text; touch-action: manipulation; }
+.pf-line { min-height: var(--tap); line-height: calc(var(--tap) - 20px); white-space: pre; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.pf-line::-webkit-scrollbar { display: none; }
+.pf-area { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40dvh; overflow-y: auto; }
+.pf:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pf:empty::before { content: attr(data-placeholder); color: var(--muted); pointer-events: none; font-family: var(--sans); -webkit-text-security: none; }
+.pf.secret { -webkit-text-security: disc; text-security: disc; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pf.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pf[contenteditable=false] { opacity: .55; }
+@media (hover: hover) and (pointer: fine) { .pf-line { min-height: 36px; line-height: 16px; font-size: 14.5px; } .pf-area { font-size: 15px; } }
+@media (pointer: coarse) { .pf { font-size: max(16px, 1em) !important; } }
+
+/* Lo marcado como oculto lo está aunque su clase defina display */
+[hidden] { display: none !important; }
