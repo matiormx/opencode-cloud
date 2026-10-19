@@ -74,7 +74,7 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overscroll-behavior: none; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg); color: var(--text);
@@ -367,7 +367,7 @@ input.secret { -webkit-text-security: disc; text-security: disc; font-family: ui
 .mp-prov { font-size: 12px; color: var(--muted); }
 .mp-star { flex: none; width: var(--tap); background: none; border: 0; color: var(--muted); cursor: pointer; display: grid; place-items: center; border-radius: 10px; }
 .mp-star.on { color: #d99a1c; }
-.mp-star:hover { background: var(--card); }
+@media (hover: hover) and (pointer: fine) { .mp-star:hover { background: var(--card); } }
 
 a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
 
@@ -593,3 +593,15 @@ body { font-optical-sizing: auto; }
   .scard, .themes, .cbtn { border-color: var(--muted); }
   .srow + .srow::before { border-top-color: var(--muted); }
 }
+
+/* ---------- Nativo en móvil (mobile-native) ---------- */
+/* iOS hace zoom al enfocar un campo con menos de 16px y no lo deshace: mínimo 16px con puntero táctil */
+@media (pointer: coarse) {
+  input:not([type=checkbox]):not([type=radio]):not([type=range]), textarea, select { font-size: max(16px, 1em) !important; }
+}
+/* Los controles no se seleccionan ni abren el menú de pulsación larga; el contenido sí */
+button, [role=button], summary, .srow, .sess, .chip, .theme-opt, .cbtn, .icon-btn, .btn, .mp-star {
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation;
+}
+/* Zonas con gesto propio (arrastrar para cerrar): el navegador no debe quedarse con el gesto */
+.sethead, .modal > h2, .modal .grab { touch-action: none; }
