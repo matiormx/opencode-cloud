@@ -90,6 +90,7 @@ export async function restart() {
 export const logs = () => logTail.slice(-60);
 // Extensiones con las que arrancó OpenCode (para saber si hay cambios pendientes de aplicar)
 export const appliedMcpJson = () => appliedMcp;
+export const startedAtMs = () => startedAt;
 export const isRunning = () => Boolean(child);
 
 function buildUrl(p, { directory, query } = {}) {

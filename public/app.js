@@ -1646,7 +1646,7 @@ async function settingsModal(section) {
 
     <div class="tabpane" data-pane="ext"${curTab === 'ext' ? '' : ' hidden'}>
     <h3 style="margin-top:0">Extensiones</h3>
-    <p class="muted" style="margin-top:0">Dan herramientas extra a OpenCode (servidores MCP). Es lo equivalente a los plugins de Claude Code.</p>
+    <p class="muted" style="margin-top:0">Dan herramientas y conocimientos extra a OpenCode: servidores MCP y skills. Es lo equivalente a los plugins de Claude Code.</p>
     <div id="ext-block"><p class="muted">Cargando…</p></div>
     </div>
 
@@ -1836,6 +1836,9 @@ async function settingsModal(section) {
   let ext = null;
   let extLoading = false;
   let extTimer = null;
+  let sk = null;
+  let skFound = null;
+  let skRepo = '';
   const extDraft = { name: '', type: 'remote', url: '', command: '', headers: '', env: '', open: false };
   const extStatus = (name) => {
     const s = ext?.status?.[name];
@@ -1862,13 +1865,31 @@ async function settingsModal(section) {
     if (!b.helper) return `${err}<div class="hint">Instala una vez el ayudante por SSH en el VPS y vuelve a abrir los ajustes:${cmdBox('sudo /opt/opencode-cloud/deploy/browser.sh setup', 'margin-top:8px')}</div>`;
     return `${err}<p class="muted" style="margin:0 0 8px">Hay que instalar Chromium y sus librerías (unos 400 MB y varios minutos). Se instala una vez para todos los usuarios.</p><button class="btn primary" data-x="browser-install">Instalar Chromium</button>`;
   };
+  const skillsBlock = () => {
+    if (!sk) return '';
+    const srcs = [...new Set(sk.items.map((s) => s.source).filter(Boolean))];
+    const rows = sk.items.map((s) => `<div class="ext-row"><div class="grow" style="min-width:0"><strong>${esc(s.name)}</strong> <span class="chip">${s.source ? esc(s.source) : 'manual'}</span><div class="muted sk-desc">${esc(s.description)}</div></div><button class="btn small danger" data-x="sk-del" data-name="${esc(s.name)}">Quitar</button></div>`).join('');
+    const found = skFound ? `<div class="ext-card" style="margin-top:10px"><div style="margin-bottom:6px"><strong>${esc(skFound.repo)}</strong> <span class="chip">${esc(skFound.sha || '')}</span></div>
+        <div class="row wrap" style="margin-bottom:4px"><button class="btn small" data-x="sk-all">Marcar todas</button><button class="btn small" data-x="sk-none">Ninguna</button></div>
+        ${skFound.skills.map((s) => `<label class="sk-pick"><input type="checkbox" data-sksel="${esc(s.name)}" ${skFound.sel.has(s.name) ? 'checked' : ''}><span><strong>${esc(s.name)}</strong> ${s.installed ? '<span class="chip">ya instalada</span>' : ''}<span class="muted sk-desc">${esc(s.description)}</span></span></label>`).join('')}
+        <p class="muted" style="font-size:12.5px;margin:8px 0">Una skill son instrucciones que seguirá el modelo: instala solo las de repositorios en los que confíes.</p>
+        <div class="row wrap"><button class="btn primary" data-x="sk-install">Instalar seleccionadas (${skFound.sel.size})</button><button class="btn ghost" data-x="sk-cancel">Cancelar</button></div></div>` : '';
+    return `
+      <h3>Habilidades (skills)</h3>
+      <p class="muted" style="margin-top:0">Guías que OpenCode carga solo cuando la tarea las necesita (por ejemplo, principios de diseño). Se descargan de GitHub y quedan en tu espacio.</p>
+      ${rows ? `<div class="ext-card" style="padding-top:2px;padding-bottom:2px">${rows}</div>` : '<p class="muted">Todavía no hay ninguna instalada.</p>'}
+      ${srcs.length ? `<div class="row wrap" style="margin-bottom:10px">${srcs.map((r) => `<button class="btn small" data-x="sk-update" data-repo="${esc(r)}">Actualizar de ${esc(r)}</button>`).join('')}</div>` : ''}
+      <div class="row wrap"><input id="sk-repo" type="text" class="grow" placeholder="usuario/repositorio" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(skRepo)}"><button class="btn" data-x="sk-find">Buscar</button></div>
+      <div class="row wrap" style="margin-top:6px"><button class="btn small ghost" data-x="sk-fill" data-repo="emilkowalski/skills">Ejemplo: emilkowalski/skills (diseño y animación)</button></div>
+      ${found}`;
+  };
   const extBlock = () => {
     if (!ext) return '<p class="muted">Cargando…</p>';
     const c7 = ext.context7;
     const pw = ext.playwright;
     const customRows = ext.custom.map((c) => `<div class="ext-row"><div class="grow" style="min-width:0"><strong>${esc(c.name)}</strong> <span class="chip">${c.type === 'remote' ? 'remota' : 'local'}</span> ${extStatus(c.name)}<div class="muted mono ext-target">${esc(c.target)}</div>${c.headerNames.length || c.envNames.length ? `<div class="muted" style="font-size:12px">${c.headerNames.length ? `Cabeceras: ${c.headerNames.map(esc).join(', ')}` : ''}${c.envNames.length ? ` Variables: ${c.envNames.map(esc).join(', ')}` : ''}</div>` : ''}${extFail(c.name)}</div>${extSwitch(`custom:${c.id}`, c.enabled, 'Activa')}<button class="btn small danger" data-x="custom-del" data-id="${esc(c.id)}" data-name="${esc(c.name)}">Quitar</button></div>`).join('');
     return `
-      ${ext.restartNeeded ? '<div class="banner" style="margin-bottom:12px"><strong>Hay cambios sin aplicar.</strong> OpenCode debe reiniciarse para usarlos.<div class="row" style="margin-top:8px"><button class="btn primary small" data-x="apply">Aplicar y reiniciar OpenCode</button></div></div>' : ''}
+      ${ext.restartNeeded || sk?.restartNeeded ? '<div class="banner" style="margin-bottom:12px"><strong>Hay cambios sin aplicar.</strong> OpenCode debe reiniciarse para usarlos.<div class="row" style="margin-top:8px"><button class="btn primary small" data-x="apply">Aplicar y reiniciar OpenCode</button></div></div>' : ''}
       <div class="ext-card">
         <div class="row" style="gap:8px;align-items:center"><div class="grow"><strong>Context7</strong> ${extStatus('context7')}<div class="muted" style="font-size:13px">Documentación actualizada de librerías y frameworks, para que OpenCode no use APIs antiguas.</div></div>${extSwitch('context7', c7.enabled)}</div>
         <div class="row wrap" style="margin-top:10px"><input id="c7-key" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="${c7.hasKey ? 'Clave guardada · escribe para cambiar' : 'Clave de Context7 (opcional, más límite)'}"><button class="btn" data-x="c7-save">Guardar</button>${c7.hasKey ? '<button class="btn danger" data-x="c7-clear">Quitar clave</button>' : ''}</div>
@@ -1889,7 +1910,8 @@ async function settingsModal(section) {
           <div id="xn-local"${extDraft.type === 'local' ? '' : ' hidden'} class="stack"><input id="xn-command" type="text" placeholder="npx -y @paquete/servidor-mcp" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(extDraft.command)}"><textarea id="xn-env" rows="2" placeholder="Variables, una por línea:&#10;CLAVE=valor" autocapitalize="off" spellcheck="false">${esc(extDraft.env)}</textarea></div>
           <button class="btn primary" data-x="custom-add">Añadir</button>
         </div>
-      </details>`;
+      </details>
+      ${skillsBlock()}`;
   };
   const drawExt = () => {
     const box = q('#ext-block');
@@ -1902,7 +1924,10 @@ async function settingsModal(section) {
   const loadExt = async (quiet = false) => {
     if (extLoading) return;
     extLoading = true;
-    try { ext = await api('GET', '/api/extensions'); drawExt(); }
+    try {
+      const [e, k] = await Promise.all([api('GET', '/api/extensions'), api('GET', '/api/skills').catch(() => sk)]);
+      ext = e; sk = k; drawExt();
+    }
     catch (err) { if (!quiet) q('#ext-block').innerHTML = `<div class="banner err">${esc(err.message)}</div>`; }
     finally { extLoading = false; }
   };
@@ -1914,6 +1939,7 @@ async function settingsModal(section) {
   extBox?.addEventListener('input', (e) => {
     const map = { 'xn-name': 'name', 'xn-url': 'url', 'xn-command': 'command', 'xn-headers': 'headers', 'xn-env': 'env' };
     if (map[e.target.id]) extDraft[map[e.target.id]] = e.target.value;
+    if (e.target.id === 'sk-repo') skRepo = e.target.value;
   });
   extBox?.addEventListener('toggle', (e) => { if (e.target.id === 'ext-new') extDraft.open = e.target.open; }, true);
   extBox?.addEventListener('change', async (e) => {
@@ -1921,6 +1947,12 @@ async function settingsModal(section) {
       extDraft.type = e.target.value;
       q('#xn-remote').hidden = extDraft.type !== 'remote';
       q('#xn-local').hidden = extDraft.type !== 'local';
+      return;
+    }
+    if (e.target.dataset?.sksel && skFound) {
+      const n = e.target.dataset.sksel;
+      if (e.target.checked) skFound.sel.add(n); else skFound.sel.delete(n);
+      const ib = q('[data-x=sk-install]'); if (ib) ib.textContent = `Instalar seleccionadas (${skFound.sel.size})`;
       return;
     }
     const key = e.target.dataset?.xsw;
@@ -1957,6 +1989,33 @@ async function settingsModal(section) {
       } else if (act === 'custom-del') {
         if (!confirm(`¿Quitar la extensión «${b.dataset.name}»?`)) return;
         await extDo(b, 'Quitando…', 'DELETE', `/api/extensions/custom/${b.dataset.id}`);
+      } else if (act === 'sk-fill') {
+        skRepo = b.dataset.repo; q('#sk-repo').value = skRepo;
+      } else if (act === 'sk-find') {
+        if (!skRepo.trim()) return toast('Escribe usuario/repositorio', 'err');
+        const r = await busyBtn(b, 'Descargando…', () => api('POST', '/api/skills/discover', { repo: skRepo }));
+        skFound = { ...r, sel: new Set(r.skills.filter((x) => !x.installed).map((x) => x.name)) };
+        drawExt();
+        q('.sk-pick')?.scrollIntoView({ block: 'nearest' });
+      } else if (act === 'sk-all' || act === 'sk-none') {
+        skFound.sel = new Set(act === 'sk-all' ? skFound.skills.map((x) => x.name) : []);
+        drawExt();
+      } else if (act === 'sk-cancel') {
+        skFound = null; drawExt();
+      } else if (act === 'sk-install') {
+        if (!skFound.sel.size) return toast('Marca al menos una skill', 'err');
+        const r = await busyBtn(b, 'Instalando…', () => api('POST', '/api/skills/install', { id: skFound.id, names: [...skFound.sel] }));
+        sk = r; skFound = null; skRepo = '';
+        drawExt();
+        toast(r.skipped?.length ? `Instaladas ${r.installed.length}; ${r.skipped.length} con problemas (${r.skipped[0].name}: ${r.skipped[0].reason})` : `${r.installed.length} skill${r.installed.length > 1 ? 's' : ''} instalada${r.installed.length > 1 ? 's' : ''}. Aplica los cambios para que OpenCode las vea.`, r.skipped?.length ? 'err' : '');
+      } else if (act === 'sk-del') {
+        if (!confirm(`¿Quitar la skill «${b.dataset.name}»?`)) return;
+        sk = await busyBtn(b, 'Quitando…', () => api('DELETE', `/api/skills/${encodeURIComponent(b.dataset.name)}`));
+        drawExt();
+      } else if (act === 'sk-update') {
+        const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/skills/update', { repo: b.dataset.repo }));
+        sk = r; drawExt();
+        toast(`Actualizadas ${r.installed.length} skill${r.installed.length === 1 ? '' : 's'} (${r.sha})${r.missing?.length ? `. Ya no están en el repositorio: ${r.missing.join(', ')}` : ''}`);
       } else if (act === 'custom-add') {
         const body = { name: extDraft.name, type: extDraft.type, url: extDraft.url, command: extDraft.command, headers: extDraft.headers, env: extDraft.env };
         if (await extDo(b, 'Añadiendo…', 'POST', '/api/extensions/custom', body)) {
