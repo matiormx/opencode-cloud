@@ -5,6 +5,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const ico = (d, extra = '') => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
 const I = {
+  download: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
   code: '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
@@ -1030,6 +1031,73 @@ function renderTool(part) {
     ${body ? `<pre>${esc(body)}</pre>` : ''}</details>`;
 }
 
+/* ---------- Archivos que menciona el agente (capturas, informes…) ---------- */
+const FILE_RE = /(?:^|[\s`'"(\[*>])((?:\.{0,2}\/)?[\w@%+~.\-\/À-ɏ]+\.(?:png|jpe?g|gif|webp|pdf|zip|csv|xlsx|docx|pptx|txt|md|json|mp3|wav|mp4|svg|log|gz|tar))(?=$|[\s`'")\],.:;!?*<])/gi;
+const fileCache = new Map(); // «proyecto:ruta» → { meta, at }
+const FILE_NULL_TTL = 20_000;
+
+function fileRefs(msg) {
+  if (msg.info?.role !== 'assistant' || msg.info.summary) return [];
+  const found = new Set();
+  const scan = (t) => { for (const m of String(t || '').matchAll(FILE_RE)) found.add(m[1].replace(/^\.\//, '')); };
+  for (const p of msg.parts || []) {
+    if (p.type === 'text') scan(p.text);
+    else if (p.type === 'tool' && p.state?.status === 'completed') {
+      for (const m of String(typeof p.state.output === 'string' ? p.state.output.slice(0, 4000) : '').matchAll(FILE_RE)) if (/\.(png|jpe?g|gif|webp)$/i.test(m[1])) found.add(m[1].replace(/^\.\//, ''));
+      const fp = p.state.input?.filePath;
+      if (p.tool === 'write' && typeof fp === 'string' && /\.(png|jpe?g|gif|webp|pdf)$/i.test(fp)) found.add(fp);
+    }
+  }
+  return [...found].filter((x) => !/^https?:/i.test(x) && !x.includes('..')).slice(0, 12);
+}
+
+const fileUrl = (pid, rel, dl) => `/api/projects/${pid}/file?path=${encodeURIComponent(rel)}${dl ? '&download=1' : ''}`;
+const fmtSize = (b) => (b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+
+function renderFiles(msg) {
+  const pid = state.project?.id;
+  if (!pid) return '';
+  const seenRel = new Set();
+  const items = [];
+  for (const r of fileRefs(msg)) {
+    const hit = fileCache.get(`${pid}:${r}`)?.meta;
+    if (!hit || seenRel.has(hit.rel)) continue;
+    seenRel.add(hit.rel);
+    items.push(hit);
+  }
+  if (!items.length) return '';
+  const imgs = items.filter((x) => x.kind === 'image');
+  const files = items.filter((x) => x.kind !== 'image');
+  return `<div class="files-strip">${imgs.map((x) => `<button type="button" class="fthumb" data-fopen="${esc(x.rel)}" aria-label="Ver ${esc(x.name)}"><img loading="lazy" decoding="async" src="${fileUrl(pid, x.rel)}" alt="${esc(x.name)}"><span>${esc(x.name)}</span></button>`).join('')}${files.map((x) => `<a class="fchip" href="${fileUrl(pid, x.rel, true)}" download="${esc(x.name)}">${ico(I.download, 'width="16" height="16"')}<span>${esc(x.name)}</span><span class="muted">${fmtSize(x.size)}</span></a>`).join('')}</div>`;
+}
+
+let fileCheckBusy = false;
+async function resolveFiles() {
+  const pid = state.project?.id;
+  if (!pid || fileCheckBusy) return;
+  const now = Date.now();
+  const want = new Set();
+  for (const m of state.messages) for (const r of fileRefs(m)) {
+    const c = fileCache.get(`${pid}:${r}`);
+    if (!c || (!c.meta && now - c.at > FILE_NULL_TTL)) want.add(r);
+  }
+  if (!want.size) return;
+  fileCheckBusy = true;
+  try {
+    const res = await api('POST', `/api/projects/${pid}/files/check`, { paths: [...want] });
+    let gained = false;
+    for (const r of want) { const meta = res[r] || null; fileCache.set(`${pid}:${r}`, { meta, at: Date.now() }); if (meta) gained = true; }
+    if (gained && state.project?.id === pid) renderMessages();
+  } catch { /* sin conexión: se reintenta en el siguiente repintado */ } finally { fileCheckBusy = false; }
+}
+
+function fileViewer(rel, name) {
+  const pid = state.project.id;
+  const m = openModal(name, `<div class="fview"><img src="${fileUrl(pid, rel)}" alt="${esc(name)}"></div>
+    <div class="row wrap" style="margin-top:12px"><a class="btn primary grow" href="${fileUrl(pid, rel, true)}" download="${esc(name)}">Descargar</a></div>`);
+  return m;
+}
+
 /* ---------- Contexto de la conversación y compactación ---------- */
 // Tokens que ocupa la conversación = los de la última respuesta del modelo (entrada + salida + caché)
 function contextInfo() {
@@ -1107,7 +1175,7 @@ function renderMessage(msg) {
     else if (p.type === 'tool') html += renderTool(p);
   }
   if (info.error) html += `<div class="banner err">${esc(info.error.data?.message || info.error.name || 'Error')}</div>`;
-  return html ? `<div class="msg assistant">${html}</div>` : '';
+  return html ? `<div class="msg assistant">${html}</div>${renderFiles(msg)}` : renderFiles(msg);
 }
 
 function renderMessages(forceScroll = false) {
@@ -1135,6 +1203,7 @@ function renderMessages(forceScroll = false) {
   renderTyping();
   renderPerms();
   updateContext();
+  resolveFiles();
   if (forceScroll || nearBottom) chat.scrollTop = chat.scrollHeight;
 }
 
@@ -2566,6 +2635,10 @@ function bindShell() {
   // Botón "ir al final" cuando el usuario se aleja del último mensaje
   const chat = $('#chat');
   const toBottom = $('#to-bottom');
+  chat.addEventListener('click', (e) => {
+    const t = e.target.closest?.('[data-fopen]');
+    if (t) fileViewer(t.dataset.fopen, t.querySelector('span')?.textContent || 'Imagen');
+  });
   chat.addEventListener('scroll', () => {
     const far = chat.scrollHeight - chat.scrollTop - chat.clientHeight > 320;
     toBottom.classList.toggle('hidden', !far);

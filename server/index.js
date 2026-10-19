@@ -628,6 +628,93 @@ router.post(
   }),
 );
 
+// --- Archivos del proyecto (capturas y entregables que genera el agente) ---
+const FILE_MAX = 25 * 1024 * 1024;
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+const SHARE_EXT = new Set(['pdf', 'zip', 'csv', 'xlsx', 'docx', 'pptx', 'txt', 'md', 'json', 'mp3', 'wav', 'mp4', 'gz', 'tar', 'svg', 'log']);
+
+// Busca por nombre (sin carpeta) un archivo dentro del proyecto: el agente suele decir «01_inicio.png» sin la carpeta
+function findByName(root, name) {
+  let best = null;
+  let seen = 0;
+  const walk = (dir, depth) => {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (++seen > 4000) return;
+      if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory() && depth < 4) walk(full, depth + 1);
+      else if (e.isFile() && e.name === name) {
+        const m = fs.statSync(full).mtimeMs;
+        if (!best || m > best.m) best = { full, m };
+      }
+    }
+  };
+  walk(root, 0);
+  return best?.full || null;
+}
+
+// Resuelve una ruta pedida por el navegador y comprueba que es un archivo permitido dentro del proyecto
+function projectFile(p, wanted) {
+  const input = String(wanted || '').replace(/\\/g, '/');
+  if (!input || input.length > 400 || input.includes('\0')) throw fail('Ruta no válida');
+  const root = fs.realpathSync(p.path);
+  const guess = path.isAbsolute(input) ? input : path.join(root, input);
+  let real;
+  try {
+    real = fs.realpathSync(guess);
+  } catch {
+    const found = !input.includes('/') ? findByName(root, input) : null;
+    if (!found) throw fail('No existe', 404);
+    real = fs.realpathSync(found);
+  }
+  if (!real.startsWith(root + path.sep)) throw fail('Fuera del proyecto', 403);
+  const rel = path.relative(root, real).split(path.sep).join('/');
+  if (rel.split('/').some((seg) => seg.startsWith('.') || seg === 'node_modules')) throw fail('No disponible', 403);
+  const ext = path.extname(real).slice(1).toLowerCase();
+  if (!IMAGE_TYPES[ext] && !SHARE_EXT.has(ext)) throw fail('Tipo de archivo no compartible', 403);
+  const st = fs.statSync(real);
+  if (!st.isFile()) throw fail('No es un archivo', 404);
+  if (st.size > FILE_MAX) throw fail('El archivo supera los 25 MB', 413);
+  return { real, rel, ext, size: st.size, name: path.basename(real) };
+}
+
+// Qué rutas de las que menciona el agente existen de verdad (y cuáles se pueden enseñar)
+router.post(
+  '/projects/:id/files/check',
+  wrap(async (req, res) => {
+    const p = getProject(req);
+    const paths = Array.isArray(req.body?.paths) ? req.body.paths.slice(0, 60) : [];
+    const out = {};
+    for (const w of paths) {
+      try {
+        const f = projectFile(p, w);
+        out[String(w)] = { rel: f.rel, name: f.name, size: f.size, kind: IMAGE_TYPES[f.ext] ? 'image' : 'file' };
+      } catch { out[String(w)] = null; }
+    }
+    res.json(out);
+  }),
+);
+
+router.get(
+  '/projects/:id/file',
+  wrap(async (req, res) => {
+    const f = projectFile(getProject(req), req.query.path);
+    const image = IMAGE_TYPES[f.ext];
+    const inline = !req.query.download && (image || f.ext === 'pdf');
+    res.set({
+      'Content-Type': image || (f.ext === 'pdf' ? 'application/pdf' : 'application/octet-stream'),
+      'Content-Length': String(f.size),
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "sandbox; default-src 'none'; img-src 'self' data:",
+      'Cache-Control': 'private, max-age=60',
+    });
+    fs.createReadStream(f.real).on('error', () => res.destroy()).pipe(res);
+  }),
+);
+
 // Compacta la conversación: OpenCode resume lo antiguo y conserva lo reciente. La respuesta llega cuando termina el resumen.
 router.post(
   '/projects/:id/sessions/:sid/compact',
