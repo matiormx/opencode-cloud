@@ -171,6 +171,10 @@ npm start            # http://127.0.0.1:3000, datos en ./data
 
 Requiere `opencode` en el PATH (o `OPENCODE_BIN=/ruta/a/opencode`) y Node ≥ 20.11.
 
+## Comprobar la instalación
+
+`sudo /opt/opencode-cloud/deploy/doctor.sh` revisa (sin cambiar nada) el sistema, el servicio, la WebUI, OpenCode, Caddy, WireGuard, los permisos de archivos y los cambios locales, y te dice qué corregir. Si la WebUI no arranca: `journalctl -u opencode-cloud -n 60 --no-pager`.
+
 ## Problemas frecuentes
 
 - **«OpenCode no responde»**: Ajustes → OpenCode → *Ver registro*. Comprueba que existe `~occloud/.opencode/bin/opencode`.
@@ -185,5 +189,5 @@ Requiere `opencode` en el PATH (o `OPENCODE_BIN=/ruta/a/opencode`) y Node ≥ 20
 server/   backend Express (auth, proyectos, git, GitHub, proxy a OpenCode, actualizador)
 public/   WebUI sin build (HTML + JS + CSS)
 bin/      set-password.js, git-askpass.sh
-deploy/   install.sh, egress.sh (túnel WireGuard opcional)
+deploy/   install.sh, doctor.sh (diagnóstico), egress.sh (túnel WireGuard opcional)
 ```
