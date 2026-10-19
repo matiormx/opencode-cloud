@@ -628,6 +628,28 @@ router.post(
   }),
 );
 
+// Compacta la conversación: OpenCode resume lo antiguo y conserva lo reciente. La respuesta llega cuando termina el resumen.
+router.post(
+  '/projects/:id/sessions/:sid/compact',
+  wrap(async (req, res) => {
+    const p = getProject(req);
+    const ID = /^[\w.:/@+-]{1,160}$/;
+    const providerID = String(req.body?.providerID || '');
+    const modelID = String(req.body?.modelID || '');
+    if (!ID.test(providerID) || !ID.test(modelID)) throw fail('Elige un modelo para poder compactar');
+    const status = await oc.json('GET', '/session/status', { directory: p.path }).catch(() => ({}));
+    if (status?.[sid(req)]?.type) throw fail('OpenCode está trabajando en esta conversación. Espera a que termine o detenla.', 409);
+    const opts = { directory: p.path, timeout: 300_000 };
+    try {
+      await oc.json('POST', `/session/${sid(req)}/summarize`, { ...opts, body: { providerID, modelID } });
+    } catch (e) {
+      if (e.status !== 404) throw e;
+      await oc.json('POST', `/api/session/${sid(req)}/compact`, { ...opts, body: {} }); // versiones nuevas de OpenCode
+    }
+    res.json({ ok: true });
+  }),
+);
+
 // --- Cola de mensajes ---
 router.get('/projects/:id/sessions/:sid/queue', wrap(async (req, res) => { const p = getProject(req); res.json(queue.list(p.id, sid(req))); }));
 router.post(
@@ -725,7 +747,7 @@ router.get(
     const providers = (cfg.providers || []).map((p) => ({
       id: p.id,
       name: p.name || p.id,
-      models: Object.values(p.models || {}).map((m) => ({ id: m.id, name: m.name || m.id })),
+      models: Object.values(p.models || {}).map((m) => ({ id: m.id, name: m.name || m.id, context: Number(m.limit?.context) || 0 })),
     }));
     const all = (prov?.all || []).map((p) => ({ id: p.id, name: p.name || p.id }));
     const names = new Map(all.map((p) => [p.id, p.name]));

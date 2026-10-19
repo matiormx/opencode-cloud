@@ -623,3 +623,17 @@ button, [role=button], summary, .srow, .sess, .chip, .theme-opt, .cbtn, .icon-bt
 
 /* Lo marcado como oculto lo está aunque su clase defina display */
 [hidden] { display: none !important; }
+
+/* Contexto de la conversación */
+.ctx-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 4px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; cursor: pointer; flex: none; }
+.ctx-btn[data-level=mid] { color: var(--warn); }
+.ctx-btn[data-level=high] { color: var(--err); }
+.ctx-ring { width: 16px; height: 16px; border-radius: 50%; background: conic-gradient(currentColor calc(var(--p) * 1%), color-mix(in srgb, currentColor 22%, transparent) 0); -webkit-mask: radial-gradient(circle, transparent 5px, #000 5.5px); mask: radial-gradient(circle, transparent 5px, #000 5.5px); flex: none; }
+.ctx-bar { height: 8px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); overflow: hidden; }
+.ctx-bar span { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+.ctx-bar[data-level=mid] span { background: var(--warn); }
+.ctx-bar[data-level=high] span { background: var(--err); }
+details.compacted { border: 1px dashed var(--line); border-radius: 12px; padding: 8px 12px; margin: 8px 0; color: var(--muted); font-size: 14px; }
+details.compacted summary { cursor: pointer; }
+details.compacted .rbody { margin-top: 8px; color: var(--text); }
+.composer-bar .model-btn { min-width: 0; flex: 0 1 auto; }

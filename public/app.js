@@ -361,6 +361,7 @@ async function mountApp() {
             <div class="composer-bar">
               <button class="attach-btn" id="attach-btn" type="button" aria-label="Adjuntar imagen" title="Adjuntar imagen">${ico(I.image)}</button>
               <button class="model-btn" id="model-btn" type="button" data-act="model-picker" aria-haspopup="dialog" aria-label="Elegir modelo"></button>
+              <button class="ctx-btn hidden" id="ctx-btn" type="button" data-act="context" aria-haspopup="dialog" aria-label="Contexto de la conversación"></button>
               <span class="grow"></span>
               <button class="send" id="send" aria-label="Enviar">${ico(I.send)}</button>
             </div>
@@ -1029,12 +1030,75 @@ function renderTool(part) {
     ${body ? `<pre>${esc(body)}</pre>` : ''}</details>`;
 }
 
+/* ---------- Contexto de la conversación y compactación ---------- */
+// Tokens que ocupa la conversación = los de la última respuesta del modelo (entrada + salida + caché)
+function contextInfo() {
+  for (let i = state.messages.length - 1; i >= 0; i--) {
+    const info = state.messages[i].info;
+    if (info?.role !== 'assistant' || info.error) continue;
+    if (info.summary) return { fresh: true, providerID: info.providerID, modelID: info.modelID };
+    const t = info.tokens;
+    if (!t) continue;
+    const used = (t.input || 0) + (t.output || 0) + (t.reasoning || 0) + (t.cache?.read || 0) + (t.cache?.write || 0);
+    if (!used) continue;
+    const model = (state.models?.providers || []).find((p) => p.id === info.providerID)?.models.find((x) => x.id === info.modelID);
+    const limit = model?.context || 0;
+    return { used, limit, pct: limit ? Math.min(100, Math.round((used / limit) * 100)) : null, providerID: info.providerID, modelID: info.modelID };
+  }
+  return null;
+}
+
+function updateContext() {
+  const btn = $('#ctx-btn');
+  if (!btn) return;
+  const c = state.project && state.sessionId ? contextInfo() : null;
+  btn.classList.toggle('hidden', !c);
+  if (!c) return;
+  const level = c.fresh || c.pct == null ? '' : c.pct >= 90 ? 'high' : c.pct >= 70 ? 'mid' : '';
+  btn.dataset.level = level;
+  btn.innerHTML = c.fresh ? `<span class="ctx-ring" style="--p:0"></span><span>Compactada</span>`
+    : c.pct == null ? `<span class="ctx-ring" style="--p:0"></span><span>${Math.round(c.used / 1000)}k</span>`
+    : `<span class="ctx-ring" style="--p:${c.pct}"></span><span>${c.pct} %</span>`;
+}
+
+function contextModal() {
+  const c = contextInfo();
+  if (!c) return;
+  const n = (v) => v.toLocaleString('es-ES');
+  const usage = c.fresh ? '<p style="margin-top:0">La conversación se acaba de compactar. El uso real aparecerá con la próxima respuesta del modelo.</p>'
+    : c.pct == null ? `<p style="margin-top:0"><strong>${n(c.used)}</strong> tokens usados. No conozco el límite de este modelo.</p>`
+    : `<p style="margin-top:0"><strong>${n(c.used)}</strong> de ${n(c.limit)} tokens (${c.pct} %)</p><div class="ctx-bar" data-level="${c.pct >= 90 ? 'high' : c.pct >= 70 ? 'mid' : ''}"><span style="width:${c.pct}%"></span></div>`;
+  const m = openModal('Contexto', `
+    ${usage}
+    <p class="muted">Compactar resume lo antiguo de la conversación y conserva lo reciente. Así cada petición lleva menos contexto, es más rápida y barata, y no se llega al límite del modelo. Se pierde detalle fino de lo antiguo. OpenCode ya compacta solo cuando se acerca al límite.</p>
+    <div class="row wrap" style="margin-top:12px"><button class="btn primary grow" id="ctx-go" ${state.busy ? 'disabled' : ''}>Compactar ahora</button></div>
+    ${state.busy ? '<p class="hint">OpenCode está trabajando: espera a que termine para compactar.</p>' : ''}`);
+  m.el.querySelector('#ctx-go').addEventListener('click', async (e) => {
+    const [pid, mid] = c.providerID && c.modelID ? [c.providerID, c.modelID] : (state.model || '').split('::');
+    if (!pid || !mid) { toast('Elige un modelo para poder compactar', 'err'); return; }
+    const projectId = state.project.id;
+    const sessionId = state.sessionId;
+    try {
+      await busyBtn(e.currentTarget, 'Compactando…', () => api('POST', `/api/projects/${projectId}/sessions/${sessionId}/compact`, { providerID: pid, modelID: mid }));
+      toast('Conversación compactada');
+      m.close();
+      if (state.sessionId === sessionId) await refreshMessages(true);
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  });
+}
+
 function renderMessage(msg) {
   const { info, parts = [] } = msg;
   if (info.role === 'user') {
     const text = parts.filter((p) => p.type === 'text' && !p.synthetic).map((p) => p.text).join('\n').trim();
     const imgs = parts.filter((p) => p.type === 'file' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(p.url || '')).map((p) => `<img class="msg-img" src="${p.url}" alt="${esc(p.filename || 'imagen')}">`).join('');
     return text || imgs ? `<div class="msg user">${imgs ? `<div class="msg-imgs">${imgs}</div>` : ''}${esc(text)}</div>` : '';
+  }
+  if (info.summary) {
+    const t = parts.filter((p) => p.type === 'text' && p.text).map((p) => p.text).join('\n').trim();
+    return t ? `<details class="compacted" data-key="${esc(info.id)}"><summary>Conversación compactada</summary><div class="rbody">${renderMarkdown(t)}</div></details>` : '';
   }
   let html = '';
   for (const p of parts) {
@@ -1070,6 +1134,7 @@ function renderMessages(forceScroll = false) {
   $$('details', inner).forEach((d) => { if (open.has(d.dataset.key)) d.open = true; });
   renderTyping();
   renderPerms();
+  updateContext();
   if (forceScroll || nearBottom) chat.scrollTop = chat.scrollHeight;
 }
 
@@ -2372,6 +2437,7 @@ function bindShell() {
       switch (act) {
         case 'close-panels': closePanels(); break;
         case 'model-picker': modelPicker(); break;
+        case 'context': contextModal(); break;
         case 'queue-del': await api('DELETE', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/${t.dataset.id}`); await loadQueue(); break;
         case 'queue-clear': await api('DELETE', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue`); await loadQueue(); break;
         case 'queue-resume': await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/resume`, {}); await loadQueue(); break;
