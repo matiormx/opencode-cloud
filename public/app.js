@@ -36,8 +36,9 @@ const I = {
 };
 
 // Tema: «system» sigue al dispositivo; «light» y «dark» lo fuerzan
-function applyTheme(mode) {
+function applyTheme(mode, animate = false) {
   const root = document.documentElement;
+  if (animate && !reducedMotion()) { root.classList.add('theme-fade'); setTimeout(() => root.classList.remove('theme-fade'), 400); }
   if (mode === 'light' || mode === 'dark') root.dataset.theme = mode; else delete root.dataset.theme;
   root.style.colorScheme = mode === 'light' || mode === 'dark' ? mode : '';
   const colors = { light: '#faf9f5', dark: '#262624' };
@@ -83,6 +84,7 @@ document.addEventListener('click', async (e) => {
 });
 
 applyTheme(store.get('theme', 'system'));
+document.addEventListener('touchstart', () => {}, { passive: true });
 
 // El teclado del móvil tapa la parte baja: las hojas se ajustan a la zona realmente visible (--vvh/--vvt)
 if (window.visualViewport) {
@@ -107,13 +109,67 @@ function toast(msg, kind = '') {
   setTimeout(() => el.remove(), kind === 'err' ? 6000 : 3200);
 }
 
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Muelle críticamente amortiguado (apple-design §4-5): parte siempre del valor y la velocidad actuales,
+// así cualquier movimiento se puede agarrar y redirigir sin saltos. `response` en segundos.
+function makeSpring(initial, onUpdate, { response = 0.34, eps = 0.001, veps = 0.02 } = {}) {
+  const w = (2 * Math.PI) / response;
+  let x = initial; let v = 0; let target = initial; let raf = 0; let t0 = 0; let done = null;
+  const step = (now) => {
+    const dt = Math.min(0.034, (now - t0) / 1000);
+    t0 = now;
+    const d = x - target;
+    const B = v + w * d;
+    const e = Math.exp(-w * dt);
+    x = target + (d + B * dt) * e;
+    v = (B - w * (d + B * dt)) * e;
+    if (Math.abs(x - target) < eps && Math.abs(v) < veps) {
+      x = target; v = 0; raf = 0; onUpdate(x);
+      const cb = done; done = null; if (cb) cb();
+      return;
+    }
+    onUpdate(x);
+    raf = requestAnimationFrame(step);
+  };
+  return {
+    to(t, vel, cb) { target = t; if (vel !== undefined && vel !== null) v = vel; done = cb || null; if (!raf) { t0 = performance.now(); raf = requestAnimationFrame(step); } },
+    set(val) { cancelAnimationFrame(raf); raf = 0; x = val; v = 0; target = val; done = null; onUpdate(x); },
+    stop() { cancelAnimationFrame(raf); raf = 0; done = null; },
+    get value() { return x; },
+  };
+}
+// Resistencia progresiva al pasar el límite (apple-design §9)
+const rubberband = (over, dim = 420, c = 0.55) => (over * dim * c) / (dim + c * Math.abs(over));
+
 function openModal(title, html, { wide = false, bare = false } = {}) {
   const back = document.createElement('div');
-  back.className = 'backdrop';
+  back.className = `backdrop spr${bare ? ' top' : ''}`;
   back.innerHTML = `<div class="modal ${wide ? 'wide' : ''}${bare ? ' bare' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
     ${bare ? '' : `<h2><span>${esc(title)}</span><button class="icon-btn" data-close aria-label="Cerrar">${ico(I.x)}</button></h2>`}
     <div class="modal-body">${html}</div></div>`;
-  const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
+  const sheet = back.querySelector('.modal');
+  const desk = () => matchMedia('(min-width: 860px)').matches;
+  const travel = () => (desk() ? 28 : Math.max(300, back.clientHeight || innerHeight));
+  let closing = false;
+  const y = makeSpring(0, (v) => {
+    sheet.style.transform = v ? `translateY(${v.toFixed(2)}px)` : '';
+    const span = travel();
+    back.style.setProperty('--sp', Math.max(0, Math.min(1, 1 - Math.max(0, v) / span)).toFixed(3));
+    if (desk()) sheet.style.opacity = String(Math.max(0, Math.min(1, 1 - v / 28)));
+    else sheet.style.opacity = '';
+  }, { response: 0.36, eps: 0.4, veps: 8 });
+
+  const remove = () => { y.stop(); closing = true; back.remove(); document.removeEventListener('keydown', onKey); };
+  const close = (vel = 0) => {
+    if (closing) return;
+    closing = true;
+    document.removeEventListener('keydown', onKey);
+    if (reducedMotion()) { back.remove(); return; }
+    const fin = () => back.remove();
+    setTimeout(fin, 900); // por si el navegador pausa las animaciones
+    y.to(travel() + 20, vel, fin);
+  };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
   back.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
@@ -122,8 +178,42 @@ function openModal(title, html, { wide = false, bare = false } = {}) {
   back.addEventListener('focusin', (e) => {
     if (e.target.matches?.('input:not([type=checkbox]):not([type=file]), textarea, select')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 320);
   });
+
+  // Arrastrar la hoja hacia abajo para cerrarla: 1:1 con el dedo, y al soltar se proyecta el impulso (apple-design §2, §5, §6)
+  const drag = (handle) => {
+    if (!handle) return;
+    handle.style.touchAction = 'none';
+    let id = null; let sy = 0; let base = 0; let hist = [];
+    handle.addEventListener('pointerdown', (e) => {
+      if (closing || desk() || e.target.closest('button, a, input, textarea, select')) return;
+      id = e.pointerId; handle.setPointerCapture(id); y.stop(); sy = e.clientY; base = y.value; hist = [[e.timeStamp, e.clientY]];
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== id) return;
+      const v = base + (e.clientY - sy);
+      y.set(v < 0 ? -rubberband(-v) : v);
+      hist.push([e.timeStamp, e.clientY]);
+      while (hist.length > 2 && e.timeStamp - hist[0][0] > 100) hist.shift();
+    });
+    const up = (e) => {
+      if (e.pointerId !== id) return;
+      id = null;
+      const [t0, y0] = hist[0];
+      const vel = ((e.clientY - y0) / Math.max(1, e.timeStamp - t0)) * 1000; // px/s al soltar
+      const projected = y.value + (vel / 1000) * 0.998 / (1 - 0.998); // dónde acabaría con el impulso
+      if (e.type === 'pointercancel' || vel < -300 || projected < sheet.offsetHeight * 0.4) y.to(0, vel); // vuelve; el signo de la velocidad decide
+      else close(vel);
+    };
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  };
+  if (!bare) drag(back.querySelector('h2'));
+
+  // Entrada: la hoja sube desde abajo con el mismo muelle (salida simétrica por el mismo camino)
+  if (reducedMotion()) y.set(0); else y.set(travel());
   document.body.append(back);
-  return { el: back, body: $('.modal-body', back), close };
+  if (!reducedMotion()) requestAnimationFrame(() => y.to(0));
+  return { el: back, body: $('.modal-body', back), close, remove, drag };
 }
 
 async function busyBtn(btn, label, fn) {
@@ -1470,7 +1560,7 @@ function newProjectModal() {
       });
     } catch (err) { toast(err.message, 'err'); }
   });
-  $('#np-gotoset', root).addEventListener('click', (ev) => { ev.preventDefault(); m.close(); settingsModal('conn'); });
+  $('#np-gotoset', root).addEventListener('click', (ev) => { ev.preventDefault(); m.remove(); settingsModal('conn'); });
   $('#np-name', root).focus();
 }
 
@@ -1506,6 +1596,7 @@ function projectMenuModal(id) {
 async function settingsModal(section) {
   const m = openModal('Ajustes', '<p class="muted">Cargando…</p>', { wide: true, bare: true });
   m.el.querySelector('.modal').insertAdjacentHTML('afterbegin', `<div class="sethead"><button type="button" class="cbtn" data-sback aria-label="Cerrar">${ico(I.x, 'width="22" height="22"')}</button><div class="settitle">Ajustes</div><button type="button" class="cbtn" data-sinfo aria-label="Acerca de"><span class="ibig">i</span></button></div>`);
+  m.drag(m.el.querySelector('.sethead'));
   const usersP = state.multiuser ? api('GET', '/api/users').catch(() => null) : Promise.resolve(null);
   const [settings, gh, oc, upd, models, eg0] = await Promise.all([
     api('GET', '/api/settings'),
@@ -1866,8 +1957,8 @@ async function settingsModal(section) {
   };
   usersBind();
 
-  click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.close(); settingsModal('conn'); });
-  click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.close(); settingsModal('conn'); });
+  click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.remove(); settingsModal('conn'); });
+  click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.remove(); settingsModal('conn'); });
   click('#g-save', async () => { await api('PUT', '/api/settings', { gitName: q('#g-name').value, gitEmail: q('#g-email').value }); toast('Identidad guardada (se aplica a nuevos commits)'); });
   m.el.querySelectorAll('[data-prov-vis]').forEach((cb) => cb.addEventListener('change', async () => {
     const prev = state.models.hidden || [];
@@ -1881,7 +1972,7 @@ async function settingsModal(section) {
     if (!confirm(`¿Quitar la clave de ${b.dataset.provName}? Sus modelos dejarán de aparecer.`)) return;
     try {
       await busyBtn(b, 'Quitando…', () => api('DELETE', `/api/providers/${encodeURIComponent(b.dataset.provDel)}`));
-      toast('Clave eliminada'); await loadModels(); renderModels(); m.close(); settingsModal('ia');
+      toast('Clave eliminada'); await loadModels(); renderModels(); m.remove(); settingsModal('ia');
     } catch (err) { toast(err.message, 'err'); }
   }));
   const showProvHelp = () => { q('#prov-help').innerHTML = providerHelpHtml(q('#prov-id').value); };
@@ -1893,7 +1984,7 @@ async function settingsModal(section) {
     toast('Clave guardada');
     await loadModels();
     renderModels();
-    m.close(); settingsModal('ia');
+    m.remove(); settingsModal('ia');
   });
   click('#oc-restart', async (b) => { if (!(await confirmInterrupt('Se reiniciará OpenCode. ¿Continuar?'))) return; await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart')); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
   click('#oc-upgrade', async (b) => { if (!(await confirmInterrupt('Se actualizará OpenCode y se reiniciará. ¿Continuar?'))) return; const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });
@@ -2100,21 +2191,58 @@ async function settingsModal(section) {
   if (curView === 'ext' || curView === 'sk') loadExt();
 
   const head = m.el.querySelector('.sethead');
-  const drawMain = () => { const pn = m.el.querySelector('[data-pane=main]'); if (pn) pn.innerHTML = mainHtml(); };
-  const openView = (k) => {
-    if (k === 'main') drawMain();
-    curView = k;
-    const slot = q('#pw-slot'); if (slot) slot.innerHTML = k === 'pw' ? pwHtml : '';
-    for (const pn of m.el.querySelectorAll('.tabpane')) pn.hidden = pn.dataset.pane !== k;
+  const paneEl = (k) => m.body.querySelector(`[data-pane="${k}"]`);
+  const drawMain = () => { const pn = paneEl('main'); if (pn) pn.innerHTML = mainHtml(); };
+  const syncHead = (k) => {
     head.querySelector('.settitle').textContent = k === 'main' ? 'Ajustes' : viewTitles[k];
     const back = head.querySelector('[data-sback]');
     back.innerHTML = ico(k === 'main' ? I.x : I.chevl, 'width="22" height="22"');
     back.setAttribute('aria-label', k === 'main' ? 'Cerrar' : 'Atrás');
     head.querySelector('[data-sinfo]').style.visibility = k === 'main' ? 'visible' : 'hidden';
-    if ((k === 'ext' || k === 'sk') && !ext) loadExt(); else if (k === 'ext' || k === 'sk') drawExt();
-    $('.modal-body', m.el).scrollTop = 0;
+    head.classList.toggle('scrolled', (paneEl(k)?.scrollTop || 0) > 4);
   };
-  openView(curView);
+  // Los paneles se deslizan como en iOS: el nuevo entra desde la derecha y el anterior se aparta con paralaje;
+  // al volver, el mismo camino al revés. Un solo muelle lleva el progreso 0→1.
+  let nav = null;
+  const layout = (p) => {
+    if (!nav) return;
+    const { a, b, dir } = nav;
+    if (dir > 0) { a.style.transform = `translateX(${(-28 * p).toFixed(2)}%)`; a.style.opacity = String(1 - 0.45 * p); b.style.transform = `translateX(${(100 * (1 - p)).toFixed(2)}%)`; }
+    else { a.style.transform = `translateX(${(100 * p).toFixed(2)}%)`; b.style.transform = `translateX(${(-28 * (1 - p)).toFixed(2)}%)`; b.style.opacity = String(1 - 0.45 * (1 - p)); }
+  };
+  const navSpring = makeSpring(1, layout, { response: 0.38, eps: 0.001, veps: 0.02 });
+  const endNav = () => {
+    if (!nav) return;
+    const { a, b } = nav;
+    a.hidden = true;
+    for (const el of [a, b]) { el.style.transform = ''; el.style.opacity = ''; el.style.zIndex = ''; el.classList.remove('lift'); }
+    nav = null;
+  };
+  const openView = (k) => {
+    if (nav) { navSpring.stop(); endNav(); } // una transición en curso se completa al instante: nunca se bloquea la entrada
+    const prev = curView;
+    if (k === 'main') drawMain();
+    curView = k;
+    const slot = q('#pw-slot'); if (slot) slot.innerHTML = k === 'pw' ? pwHtml : '';
+    const a = paneEl(prev); const b = paneEl(k);
+    syncHead(k);
+    if (prev !== k && a && b && !reducedMotion()) {
+      const dir = k === 'main' ? -1 : 1;
+      b.hidden = false;
+      if (dir > 0) b.scrollTop = 0;
+      nav = { a, b, dir };
+      (dir > 0 ? b : a).classList.add('lift');
+      b.style.zIndex = dir > 0 ? 2 : 1; a.style.zIndex = dir > 0 ? 1 : 2;
+      navSpring.set(0);
+      navSpring.to(1, 0, () => { endNav(); syncHead(k); });
+    } else {
+      for (const pn of m.el.querySelectorAll('.tabpane')) pn.hidden = pn.dataset.pane !== k;
+      if (b && k !== 'main') b.scrollTop = 0;
+    }
+    if ((k === 'ext' || k === 'sk') && !ext) loadExt(); else if (k === 'ext' || k === 'sk') drawExt();
+  };
+  syncHead(curView);
+  m.body.addEventListener('scroll', (e) => { if (e.target.dataset?.pane === curView) head.classList.toggle('scrolled', e.target.scrollTop > 4); }, true);
   m.el.addEventListener('click', async (e) => {
     const pwb = e.target.closest('#pw-save');
     if (pwb) {
@@ -2125,7 +2253,7 @@ async function settingsModal(section) {
     if (go) return openView(go.dataset.go);
     if (e.target.closest('[data-sback]')) return curView === 'main' ? m.close() : openView('main');
     const th = e.target.closest('[data-theme-set]');
-    if (th) { store.set('theme', th.dataset.themeSet); applyTheme(th.dataset.themeSet); drawMain(); return; }
+    if (th) { store.set('theme', th.dataset.themeSet); applyTheme(th.dataset.themeSet, true); drawMain(); return; }
     if (e.target.closest('[data-logout]')) { try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ } m.close(); showLogin(); return; }
     if (e.target.closest('[data-sinfo]')) {
       const u = state.update;
