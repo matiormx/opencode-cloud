@@ -356,7 +356,7 @@ async function mountApp() {
           <div class="queue hidden" id="queue" aria-live="polite"></div>
           <div class="composer">
             <div class="attach-row hidden" id="attach-row"></div>
-            <textarea id="input" name="oc-prompt" rows="1" placeholder="Pide algo a OpenCode…" aria-label="Instrucción para OpenCode" enterkeyhint="send" inputmode="text" autocomplete="off" autocapitalize="sentences" autocorrect="on" spellcheck="true" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"></textarea>
+            <div id="input" class="chat-input" role="textbox" aria-multiline="true" aria-label="Instrucción para OpenCode" contenteditable="plaintext-only" enterkeyhint="send" inputmode="text" autocapitalize="sentences" autocorrect="on" spellcheck="true" data-placeholder="Pide algo a OpenCode…"></div>
             <input type="file" id="attach-file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
             <div class="composer-bar">
               <button class="attach-btn" id="attach-btn" type="button" aria-label="Adjuntar imagen" title="Adjuntar imagen">${ico(I.image)}</button>
@@ -393,6 +393,7 @@ let timersStarted = false;
 function renderAll() {
   renderSidebar();
   renderTopbar();
+  textboxShim($('#input'));
   renderMessages();
   renderModels();
   renderGit();
@@ -1315,6 +1316,34 @@ async function submitInput() {
   autosize(input);
   renderAttach();
   await sendMessage(text, images);
+}
+
+
+/* El cuadro del chat es un editable de texto plano, no un <textarea>: iOS ofrece el código de verificación
+   y las contraseñas guardadas del sitio en cualquier campo de formulario, pero no en un editable.
+   Mantiene la interfaz de un campo (value, placeholder, focus) para el resto del código. */
+function textboxShim(el) {
+  if (!el || el.dataset.shim) return;
+  el.dataset.shim = '1';
+  el.contentEditable = 'plaintext-only';
+  if (el.contentEditable !== 'plaintext-only') el.contentEditable = 'true'; // iOS antiguo
+  const sync = () => {
+    if (!el.textContent) el.replaceChildren(); // sin <br> residual: así funciona el :empty
+  };
+  Object.defineProperty(el, 'value', {
+    get: () => el.innerText.replace(/\n$/, ''),
+    set: (v) => { el.textContent = v; },
+  });
+  Object.defineProperty(el, 'placeholder', { get: () => el.dataset.placeholder || '', set: (v) => { el.dataset.placeholder = v; } });
+  el.addEventListener('input', sync);
+  // Pegar siempre como texto plano (también en navegadores sin plaintext-only)
+  el.addEventListener('paste', (e) => {
+    if (e.defaultPrevented || e.clipboardData?.files?.length) return;
+    const t = e.clipboardData?.getData('text/plain');
+    if (t == null) return;
+    e.preventDefault();
+    document.execCommand('insertText', false, t);
+  });
 }
 
 function autosize(el) {
