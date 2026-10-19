@@ -47,16 +47,36 @@ function readHelper() {
   try { return JSON.parse(fs.readFileSync(path.join(OUTBOX, 'status.json'), 'utf8')); } catch { return null; }
 }
 
+function readHealth() {
+  try { return JSON.parse(fs.readFileSync(path.join(OUTBOX, 'health.json'), 'utf8')); } catch { return null; }
+}
+
 export function helperInfo() {
   const h = readHelper();
   const inboxOk = (() => { try { return fs.statSync(INBOX).isDirectory(); } catch { return false; } })();
   if (!h || !inboxOk) return { helper: false };
-  return { helper: true, configured: Boolean(h.configured), active: Boolean(h.active), directIp: h.directIp || '', tunnelIp: h.tunnelIp || '', message: h.message || '', helperAt: h.at || 0 };
+  const hl = readHealth();
+  // Estado vivo (lo publica un temporizador cada minuto); si no existe o está viejo, se usa la última acción
+  const fresh = hl && Date.now() - (hl.at || 0) < 180_000;
+  return {
+    helper: true,
+    helperV: hl?.v || 1,
+    configured: Boolean(fresh ? hl.configured : h.configured),
+    active: Boolean(fresh ? hl.active : h.active),
+    enabled: fresh ? Boolean(hl.enabled) : null,
+    handshakeAge: fresh && Number.isFinite(hl.handshakeAge) ? hl.handshakeAge : null,
+    endpoint: hl?.endpoint || '',
+    address: hl?.address || '',
+    directIp: h.directIp || '',
+    tunnelIp: h.tunnelIp || '',
+    message: h.message || '',
+    helperAt: h.at || 0,
+  };
 }
 
 export async function request(action, conf) {
   if (!helperInfo().helper) throw Object.assign(new Error('El ayudante no está instalado en el VPS'), { status: 409 });
-  if (!['apply', 'on', 'off', 'remove'].includes(action)) throw Object.assign(new Error('Acción no válida'), { status: 400 });
+  if (!['apply', 'on', 'off', 'remove', 'reconnect'].includes(action)) throw Object.assign(new Error('Acción no válida'), { status: 400 });
   if (action === 'apply') {
     if (typeof conf !== 'string' || !conf.trim()) throw Object.assign(new Error('Pega o carga el contenido del fichero .conf'), { status: 400 });
     if (Buffer.byteLength(conf) > MAX_CONF) throw Object.assign(new Error('El fichero es demasiado grande para ser una configuración WireGuard'), { status: 400 });

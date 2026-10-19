@@ -94,6 +94,10 @@ if [ -f /etc/wireguard/ocegress.conf ]; then
   else warn "Hay configuración WireGuard pero el túnel está desactivado"; hint "sudo $APP_DIR/deploy/egress.sh on"; fi
 else echo "  (no configurado)"; fi
 systemctl is-active --quiet opencode-egress.path 2>/dev/null && ok "Ayudante de WireGuard instalado" || true
+if [ -f /etc/wireguard/ocegress.conf ]; then
+  systemctl is-active --quiet opencode-egress-watch.timer 2>/dev/null && ok "Vigilante del túnel activo (lo recupera si se cae)" || { warn "Falta el vigilante del túnel (no se reconecta solo si se cae)"; hint "sudo $APP_DIR/deploy/egress.sh setup"; }
+  systemctl is-enabled --quiet wg-quick@ocegress 2>/dev/null && ok "El túnel arranca con el sistema" || warn "El túnel no está habilitado en el arranque (¿lo desactivaste?)"
+fi
 
 sec "Multiusuario (opcional)"
 if grep -q '^MULTIUSER=1' "$ENV_FILE" 2>/dev/null; then

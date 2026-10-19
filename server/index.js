@@ -168,7 +168,7 @@ const notInstance = (req, res, next) => (config.instance ? next(fail('Lo gestion
 router.post('/egress/config', notInstance, wrap(async (req, res) => res.json(await egress.request('apply', req.body?.conf))));
 router.post('/egress/action', notInstance, wrap(async (req, res) => {
   const a = String(req.body?.action || '');
-  if (!['on', 'off', 'remove'].includes(a)) return res.status(400).json({ error: 'Acción no válida' });
+  if (!['on', 'off', 'remove', 'reconnect'].includes(a)) return res.status(400).json({ error: 'Acción no válida' });
   res.json(await egress.request(a));
 }));
 

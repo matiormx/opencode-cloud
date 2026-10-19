@@ -25,6 +25,7 @@ APP_USER="${APP_USER:-occloud}"
 IFACE="${IFACE:-ocegress}"
 MTU="${MTU:-1380}"
 SERVICE=opencode-cloud
+HELPER_VERSION=2
 ENV_FILE="${ENV_FILE:-/etc/$SERVICE.env}"
 TABLE=51820
 USER_UIDS="${USER_UIDS:-61000-61999}"   # uids de los usuarios del modo multiusuario
@@ -223,6 +224,64 @@ do_install() {
   [ "$DRY" = 1 ] && touch "$OUTBOX/.dry-active" 2>/dev/null || true
 }
 
+# Segundos desde el último handshake con el servidor de casa; -1 si no ha habido ninguno
+hs_age() {
+  [ "$DRY" = 1 ] && { echo 5; return; }
+  local t; t="$(wg show "$IFACE" latest-handshakes 2>/dev/null | awk '{print $2; exit}')"
+  if [[ "${t:-0}" =~ ^[0-9]+$ ]] && [ "${t:-0}" -gt 0 ]; then echo $(( $(date +%s) - t )); else echo -1; fi
+}
+
+# Estado "vivo" para la WebUI (health.json). Solo texto validado; nunca la clave privada.
+write_health() {
+  local configured=false active=false enabled=false age=-1 ep="" ad="" tmp re_ep re_ad
+  [ -f "$CONF" ] && configured=true
+  tunnel_active && active=true
+  if [ "$DRY" != 1 ] && systemctl is-enabled --quiet "$UNIT" 2>/dev/null; then enabled=true; fi
+  [ "$active" = true ] && age="$(hs_age)"
+  if [ -f "$CONF" ]; then
+    ep="$(sed -n 's/^Endpoint = //p' "$CONF" | head -n1)"; ad="$(sed -n 's/^Address = //p' "$CONF" | head -n1)"
+  fi
+  re_ep='^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\]):[0-9]{1,5}$'; re_ad='^[0-9A-Fa-f:.,/ ]+$'
+  [[ "$ep" =~ $re_ep ]] || ep=""; [[ "$ad" =~ $re_ad ]] || ad=""
+  mkdir -p "$OUTBOX"
+  tmp="$(mktemp "$OUTBOX/.h.XXXXXX")"
+  printf '{"v":%s,"configured":%s,"active":%s,"enabled":%s,"handshakeAge":%s,"endpoint":"%s","address":"%s","at":%s000}\n' \
+    "$HELPER_VERSION" "$configured" "$active" "$enabled" "$age" "$ep" "$ad" "$(date +%s)" > "$tmp"
+  chmod 644 "$tmp"; mv -f "$tmp" "$OUTBOX/health.json"
+}
+
+# Vigilante (lo lanza un temporizador de systemd cada minuto): si el túnel debería estar activo pero se ha caído
+# (p. ej. el DNS no respondía al arrancar, o tu IP de casa ha cambiado) lo recupera sin que tengas que volver a pegar nada.
+watch() {
+  mkdir -p "$OUTBOX"
+  if [ -f "$CONF" ] && [ "$DRY" != 1 ] && systemctl is-enabled --quiet "$UNIT" 2>/dev/null; then
+    local stf="$OUTBOX/.watch" last=0 now age pub ep
+    now="$(date +%s)"; [ -f "$stf" ] && last="$(cat "$stf" 2>/dev/null || echo 0)"; [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    if ! tunnel_active; then
+      if [ $((now - last)) -ge 120 ]; then echo "$now" > "$stf"; log "El túnel estaba caído: reiniciándolo"; systemctl restart "$UNIT" || true; fi
+    else
+      age="$(hs_age)"
+      if { [ "$age" -lt 0 ] || [ "$age" -gt 300 ]; } && [ $((now - last)) -ge 300 ]; then
+        echo "$now" > "$stf"
+        pub="$(sed -n 's/^PublicKey = //p' "$CONF" | head -n1)"; ep="$(sed -n 's/^Endpoint = //p' "$CONF" | head -n1)"
+        log "Sin handshake desde hace ${age}s: volviendo a resolver el Endpoint ($ep)"
+        wg set "$IFACE" peer "$pub" endpoint "$ep" 2>/dev/null || true
+        sleep 8
+        age="$(hs_age)"
+        if [ "$age" -lt 0 ] || [ "$age" -gt 300 ]; then log "Sigue sin handshake: reiniciando el túnel"; systemctl restart "$UNIT" || true; fi
+      fi
+    fi
+  fi
+  write_health
+}
+
+# Reconexión pedida desde la WebUI: reinicia el túnel y vuelve a resolver el Endpoint
+reconnect() {
+  [ "$DRY" = 1 ] && return 0
+  systemctl is-enabled --quiet "$UNIT" 2>/dev/null || return 1
+  systemctl restart "$UNIT"
+}
+
 # ---------------------------------------------------------------- Modo ayudante (lo lanza systemd como root)
 # Estado para la WebUI: JSON con solo texto fijo (nunca se copia contenido del usuario)
 write_status() { # id ok mensaje [directIp tunnelIp]
@@ -236,6 +295,7 @@ write_status() { # id ok mensaje [directIp tunnelIp]
   printf '{"id":"%s","ok":%s,"message":"%s","configured":%s,"active":%s,"directIp":"%s","tunnelIp":"%s","at":%s000}\n' \
     "$id" "$ok" "$msg" "$configured" "$active" "$d" "$t" "$(date +%s)" > "$tmp"
   chmod 644 "$tmp"; mv -f "$tmp" "$OUTBOX/status.json"
+  write_health
 }
 
 worker() {
@@ -271,6 +331,14 @@ worker() {
     remove)
       sys systemctl disable --now "$UNIT" >/dev/null 2>&1 || true; [ "$DRY" = 1 ] && rm -f "$OUTBOX/.dry-active"
       rm -f -- "$CONF"; write_status "$id" true "Configuración eliminada" ;;
+    reconnect)
+      if [ ! -f "$CONF" ]; then write_status "$id" false "Todavía no hay ninguna configuración"; return 0; fi
+      if reconnect; then
+        check >/dev/null 2>&1 || true
+        if [ -n "${CHECK_TUNNEL:-}" ] && [ "${CHECK_TUNNEL}" != "${CHECK_DIRECT:-}" ]; then write_status "$id" true "Túnel reconectado" "${CHECK_DIRECT:-}" "${CHECK_TUNNEL:-}"
+        elif handshake_ok; then write_status "$id" true "Túnel reconectado, pero OpenCode no consigue salir por él: revisa el reenvío de IP y el NAT del servidor de casa" "${CHECK_DIRECT:-}" ""
+        else write_status "$id" true "Túnel reiniciado, pero no hay handshake: revisa que tu servidor de casa esté encendido, el Endpoint y el puerto UDP" "${CHECK_DIRECT:-}" ""; fi
+      else write_status "$id" false "El túnel está desactivado: actívalo primero"; fi ;;
     status) write_status "$id" true "Estado actualizado" ;;
     *) write_status "$id" false "Acción no reconocida" ;;
   esac
@@ -304,8 +372,30 @@ Unit=opencode-egress.service
 [Install]
 WantedBy=multi-user.target
 EOF
+  cat > "/etc/systemd/system/opencode-egress-watch.service" <<EOF
+[Unit]
+Description=OpenCode Cloud — vigila el túnel WireGuard y lo recupera si se cae
+
+[Service]
+Type=oneshot
+Environment=APP_USER=$APP_USER IFACE=$IFACE MTU=$MTU DATA_DIR=$DATA_DIR
+ExecStart=$HELPER watch
+EOF
+  cat > "/etc/systemd/system/opencode-egress-watch.timer" <<EOF
+[Unit]
+Description=OpenCode Cloud — vigilancia del túnel WireGuard
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
+EOF
   systemctl daemon-reload
   systemctl enable --now opencode-egress.path >/dev/null
+  systemctl enable --now opencode-egress-watch.timer >/dev/null
   write_status none true "Ayudante instalado"
   log "Listo. Abre Ajustes → Salida a internet en la WebUI para cargar tu configuración de WireGuard."
   log "(Si actualizas la aplicación y cambia este script, vuelve a ejecutar: sudo $0 setup)"
@@ -315,6 +405,7 @@ cmd="${1:-status}"
 case "$cmd" in
   setup) setup ;;
   worker) worker ;;
+  watch) watch ;;
   install)
     src="${2:-}"; [ -n "$src" ] || die "Uso: $0 install /ruta/cliente.conf   (o '-' para leer de la entrada estándar)"
     mkdir -p "$OUTBOX"
@@ -334,5 +425,5 @@ case "$cmd" in
     sys systemctl disable --now "$UNIT" >/dev/null 2>&1 || true
     rm -f "$CONF"; restart_app
     log "Eliminado." ;;
-  *) die "Uso: $0 setup | install <cliente.conf> | on | off | status | remove" ;;
+  *) die "Uso: $0 setup | watch | install <cliente.conf> | on | off | status | remove" ;;
 esac

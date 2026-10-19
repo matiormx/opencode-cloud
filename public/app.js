@@ -1476,6 +1476,7 @@ async function settingsModal(section) {
       ${u.underSystemd ? '' : '<p class="muted" style="font-size:13px">No se ejecuta bajo systemd: tras actualizar tendrás que reiniciar el proceso a mano.</p>'}`;
   };
 
+  let egDraft = ''; // lo pegado en el formulario: no se pierde si falla al aplicar
   const egressBlock = () => {
     if (!eg) return '<p class="muted" style="margin:0">No se pudo consultar el estado.</p>';
     const ipTxt = (ip) => (ip ? ` · IP ${esc(ip)}` : '');
@@ -1484,25 +1485,37 @@ async function settingsModal(section) {
       <p style="margin-bottom:6px">Para gestionarlo desde aquí hay que instalar un pequeño ayudante en el VPS (una sola vez, por SSH):</p>
       <pre class="code" style="margin-bottom:10px">sudo /opt/opencode-cloud/deploy/egress.sh setup</pre>
       <button class="btn" id="eg-recheck">Ya lo he instalado, comprobar</button>`;
-    const problem = eg.active && /no consigue|no hay handshake/.test(eg.message || '');
+    const age = eg.handshakeAge;
+    const stale = eg.active && age != null && (age < 0 || age > 300);
+    const problem = eg.active && (stale || /no consigue|no hay handshake/.test(eg.message || ''));
+    const hs = eg.active && age != null ? (age < 0 ? 'sin handshake todavía' : `último handshake hace ${age < 90 ? `${age} s` : `${Math.round(age / 60)} min`}`) : '';
     const state1 = eg.active
       ? (problem ? '<span style="color:var(--warn)">Túnel activo con problemas</span>' : `<span style="color:var(--ok)">Activo</span>: OpenCode sale por tu casa${ipTxt(eg.tunnel ? eg.ip : eg.tunnelIp)}`)
       : (eg.configured ? 'Configurado pero <strong>desactivado</strong>: sale directo desde el VPS' : 'Sin configurar: sale directo desde el VPS')
         + ipTxt(eg.ip);
-    return `
-      <p style="margin-top:0">${state1}</p>
-      ${eg.active && eg.directIp ? `<p class="muted" style="margin-top:-6px;font-size:13px">IP del VPS: ${esc(eg.directIp)}</p>` : ''}
-      ${problem ? `<div class="banner err" style="margin-bottom:10px">${esc(eg.message)}</div>` : ''}
-      ${eg.configured ? `<div class="row wrap" style="margin-bottom:12px">
-        ${eg.active ? '<button class="btn" id="eg-off">Desactivar</button>' : '<button class="btn primary" id="eg-on">Activar</button>'}
-        <button class="btn danger" id="eg-remove">Quitar configuración</button></div>` : ''}
+    const saved = eg.configured ? `<div class="banner" style="margin-bottom:10px">
+        <strong>Configuración guardada en el VPS</strong>${eg.endpoint ? `<br>Servidor de casa: <code>${esc(eg.endpoint)}</code>` : ''}${eg.address ? `<br>Dirección del túnel: <code>${esc(eg.address)}</code>` : ''}
+        <br><span class="muted">La clave privada está guardada y no se vuelve a mostrar por seguridad.${hs ? ` · ${hs}` : ''}</span></div>` : '';
+    const old = eg.helperV < 2 ? '<div class="banner" style="margin-bottom:10px">El ayudante está desactualizado: no vigila el túnel ni recupera la conexión si se cae. Ejecuta de nuevo <code>sudo /opt/opencode-cloud/deploy/egress.sh setup</code> (no pierdes tu configuración).</div>' : '';
+    const draft = egDraft ? esc(egDraft) : '';
+    const form = `
       <label for="eg-conf" class="muted" style="font-size:13.5px;display:block;margin-bottom:6px">${eg.configured ? 'Sustituir la configuración' : 'Configuración del cliente WireGuard'} (el contenido del archivo <code>.conf</code>)</label>
-      <textarea id="eg-conf" rows="6" class="mono" style="font-size:13px" placeholder="[Interface]&#10;PrivateKey = …&#10;Address = 10.8.0.2/32&#10;&#10;[Peer]&#10;PublicKey = …&#10;Endpoint = tucasa.ejemplo.org:51820&#10;AllowedIPs = 0.0.0.0/0" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"></textarea>
+      <textarea id="eg-conf" rows="6" class="mono" style="font-size:13px" placeholder="[Interface]&#10;PrivateKey = …&#10;Address = 10.8.0.2/32&#10;&#10;[Peer]&#10;PublicKey = …&#10;Endpoint = tucasa.ejemplo.org:51820&#10;AllowedIPs = 0.0.0.0/0" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">${draft}</textarea>
       <div class="row wrap" style="margin-top:8px">
         <label class="btn" for="eg-file" style="cursor:pointer">Cargar archivo…</label><input id="eg-file" type="file" style="display:none">
         <button class="btn primary grow" id="eg-save">Guardar y activar</button>
       </div>
       <p class="muted" style="font-size:12.5px;margin:8px 0 0">La clave privada se guarda solo en el VPS (<code>/etc/wireguard</code>, solo root) y no vuelve a mostrarse. Tu servidor de casa debe permitir <code>0.0.0.0/0</code>, reenviar paquetes y hacer NAT.</p>`;
+    return `
+      <p style="margin-top:0">${state1}</p>
+      ${eg.active && eg.directIp ? `<p class="muted" style="margin-top:-6px;font-size:13px">IP del VPS: ${esc(eg.directIp)}</p>` : ''}
+      ${problem ? `<div class="banner err" style="margin-bottom:10px">${esc(stale ? `El servidor de casa no responde (${hs}). El vigilante intentará reconectar solo; también puedes pulsar «Reconectar». Si tu IP de casa cambió, comprueba el nombre del Endpoint.` : eg.message)}</div>` : ''}
+      ${old}
+      ${saved}
+      ${eg.configured ? `<div class="row wrap" style="margin-bottom:12px">
+        ${eg.active ? '<button class="btn" id="eg-reconnect">Reconectar</button><button class="btn" id="eg-off">Desactivar</button>' : '<button class="btn primary" id="eg-on">Activar</button>'}
+        <button class="btn danger" id="eg-remove">Quitar configuración</button></div>
+      <details id="eg-replace"${egDraft ? ' open' : ''}><summary class="muted" style="cursor:pointer;margin-bottom:8px">Sustituir la configuración…</summary>${form}</details>` : form}`;
   };
 
   const genPass = () => {
@@ -1624,15 +1637,18 @@ async function settingsModal(section) {
     q('#eg-file')?.addEventListener('change', async (e) => {
       const f = e.target.files?.[0]; if (!f) return;
       if (f.size > 8192) { toast('Ese archivo es demasiado grande para ser un .conf de WireGuard', 'err'); return; }
-      q('#eg-conf').value = await f.text(); e.target.value = '';
+      q('#eg-conf').value = await f.text(); egDraft = q('#eg-conf').value; e.target.value = '';
     });
     click('#eg-save', async (b) => {
       const conf = q('#eg-conf').value;
       if (!conf.trim()) { toast('Pega el contenido del .conf o carga el archivo', 'err'); return; }
+      egDraft = conf;
       const r = await busyBtn(b, 'Aplicando…', () => api('POST', '/api/egress/config', { conf }));
-      q('#eg-conf').value = '';
+      if (r.ok) egDraft = '';
       await egAfter(r, 'Túnel activado');
     });
+    q('#eg-conf')?.addEventListener('input', (e) => { egDraft = e.target.value; });
+    click('#eg-reconnect', async (b) => { const r = await busyBtn(b, 'Reconectando…', () => api('POST', '/api/egress/action', { action: 'reconnect' })); eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message || 'Hecho', r.ok ? undefined : 'err'); egRefresh(); });
     click('#eg-on', async (b) => egAfter(await busyBtn(b, 'Activando…', () => api('POST', '/api/egress/action', { action: 'on' })), 'Túnel activado'));
     click('#eg-off', async (b) => { if (!(await confirmInterrupt('Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
       const r = await busyBtn(b, 'Desactivando…', () => api('POST', '/api/egress/action', { action: 'off' }));
