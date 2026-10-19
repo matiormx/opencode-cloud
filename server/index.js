@@ -26,7 +26,7 @@ app.disable('x-powered-by');
 app.set('trust proxy', 'loopback');
 // Modo multiusuario: las peticiones de los usuarios que no son el administrador se reenvían a su espacio sin leer el cuerpo
 app.use('/api', gateway.proxy);
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '14mb' })); // los mensajes con imágenes van en base64
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -596,13 +596,28 @@ router.post('/projects/:id/sessions/:sid/queue/resume', wrap(async (req, res) =>
 router.get('/projects/:id/permissions', ocRoute((dir) => oc.json('GET', '/permission', { directory: dir })));
 router.get('/projects/:id/status', ocRoute((dir) => oc.json('GET', '/session/status', { directory: dir })));
 
+// Imágenes adjuntas: solo tipos de imagen habituales, como data URL, con tope de número y tamaño
+const IMG_RE = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/;
+function parseImages(list) {
+  if (list == null) return [];
+  if (!Array.isArray(list) || list.length > 4) throw fail('Máximo 4 imágenes por mensaje');
+  return list.map((im, i) => {
+    const m = IMG_RE.exec(String(im?.url || ''));
+    if (!m) throw fail('Imagen no válida (usa PNG, JPG, WebP o GIF)');
+    if (m[2].length * 0.75 > 3.5 * 1024 * 1024) throw fail('Una imagen supera los 3,5 MB');
+    const name = String(im?.name || '').replace(/[^\w.\- ]/g, '').slice(0, 60) || `imagen-${i + 1}`;
+    return { type: 'file', mime: m[1], filename: name, url: m[0] };
+  });
+}
+
 router.post(
   '/projects/:id/sessions/:sid/send',
   wrap(async (req, res) => {
     const p = getProject(req);
     const text = String(req.body?.text || '');
-    if (!text.trim()) throw fail('Mensaje vacío');
-    const body = { parts: [{ type: 'text', text }] };
+    const imgs = parseImages(req.body?.images);
+    if (!text.trim() && !imgs.length) throw fail('Mensaje vacío');
+    const body = { parts: [...(text.trim() ? [{ type: 'text', text }] : []), ...imgs] };
     const m = req.body?.model;
     if (m?.providerID && m?.modelID) body.model = { providerID: String(m.providerID), modelID: String(m.modelID) };
     if (req.body?.agent) body.agent = String(req.body.agent);

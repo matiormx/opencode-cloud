@@ -11,6 +11,7 @@ const I = {
   git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 4-6 3-11 5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   send: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-9 9"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>',
   x: '<path d="M18 6L6 18M6 6l12 12"/>',
   more: '<circle cx="5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="19" cy="12" r="1.2" fill="currentColor"/>',
@@ -74,6 +75,7 @@ const fmtDate = (ms) => new Date(ms).toLocaleString('es-ES', { day: 'numeric', m
 
 /* ============================== Estado ============================== */
 const state = {
+  attach: [], // imágenes pendientes de enviar: { name, url }
   me: null, // { name, role } del usuario con sesión
   multiuser: false,
   projects: [],
@@ -201,8 +203,11 @@ async function mountApp() {
           <div class="wait-banner hidden" id="wait" role="status" aria-live="polite"></div>
           <div class="queue hidden" id="queue" aria-live="polite"></div>
           <div class="composer">
+            <div class="attach-row hidden" id="attach-row"></div>
             <textarea id="input" rows="1" placeholder="Pide algo a OpenCode…" aria-label="Mensaje"></textarea>
+            <input type="file" id="attach-file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
             <div class="composer-bar">
+              <button class="attach-btn" id="attach-btn" type="button" aria-label="Adjuntar imagen" title="Adjuntar imagen">${ico(I.image)}</button>
               <button class="model-btn" id="model-btn" type="button" data-act="model-picker" aria-haspopup="dialog" aria-label="Elegir modelo"></button>
               <span class="grow"></span>
               <button class="send" id="send" aria-label="Enviar">${ico(I.send)}</button>
@@ -872,7 +877,8 @@ function renderMessage(msg) {
   const { info, parts = [] } = msg;
   if (info.role === 'user') {
     const text = parts.filter((p) => p.type === 'text' && !p.synthetic).map((p) => p.text).join('\n').trim();
-    return text ? `<div class="msg user">${esc(text)}</div>` : '';
+    const imgs = parts.filter((p) => p.type === 'file' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(p.url || '')).map((p) => `<img class="msg-img" src="${p.url}" alt="${esc(p.filename || 'imagen')}">`).join('');
+    return text || imgs ? `<div class="msg user">${imgs ? `<div class="msg-imgs">${imgs}</div>` : ''}${esc(text)}</div>` : '';
   }
   let html = '';
   for (const p of parts) {
@@ -1032,10 +1038,52 @@ function modelPicker() {
   setTimeout(() => { if (matchMedia('(min-width: 860px)').matches) $('#mp-q', m.el)?.focus(); }, 50);
 }
 
+// --- Imágenes adjuntas ---
+const MAX_IMAGES = 4;
+function readImage(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('No se pudo leer la imagen'));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Formato de imagen no compatible'));
+      img.onload = () => {
+        // Se reduce a 1600 px como máximo para no subir fotos enormes desde el móvil
+        const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+        if (k === 1 && file.size < 1.5 * 1024 * 1024 && /^image\/(png|jpeg|webp)$/.test(file.type)) return resolve({ name: file.name || 'imagen', url: fr.result });
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        const g = c.getContext('2d');
+        g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+        g.drawImage(img, 0, 0, c.width, c.height);
+        resolve({ name: (file.name || 'imagen').replace(/\.\w+$/, '') + '.jpg', url: c.toDataURL('image/jpeg', 0.88) });
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+async function addImages(files) {
+  const list = [...files].filter((f) => f.type.startsWith('image/'));
+  if (!list.length) return;
+  for (const f of list) {
+    if (state.attach.length >= MAX_IMAGES) { toast(`Máximo ${MAX_IMAGES} imágenes por mensaje`, 'err'); break; }
+    try { state.attach.push(await readImage(f)); } catch (e) { toast(e.message, 'err'); }
+  }
+  renderAttach();
+}
+function renderAttach() {
+  const row = $('#attach-row');
+  if (!row) return;
+  row.classList.toggle('hidden', !state.attach.length);
+  row.innerHTML = state.attach.map((a, i) => `<div class="thumb"><img src="${a.url}" alt="${esc(a.name)}"><button type="button" class="thumb-x" data-i="${i}" aria-label="Quitar imagen">×</button></div>`).join('');
+  updateSendButton();
+}
+
 function updateSendButton() {
   const b = $('#send');
   if (!b) return;
-  const typed = Boolean($('#input')?.value.trim());
+  const typed = Boolean($('#input')?.value.trim()) || state.attach.length > 0;
   const stop = state.busy && !typed;
   b.classList.toggle('stop', stop);
   b.innerHTML = ico(stop ? I.stop : I.send);
@@ -1046,10 +1094,10 @@ function updateSendButton() {
   b.disabled = !state.project;
 }
 
-async function sendMessage(text) {
+async function sendMessage(text, images = []) {
   if (!state.project) return;
   text = text.trim();
-  if (!text) return;
+  if (!text && !images.length) return;
   try {
     if (!state.sessionId) {
       const s = await api('POST', `/api/projects/${state.project.id}/sessions`, {});
@@ -1059,12 +1107,13 @@ async function sendMessage(text) {
       renderSidebar();
     }
     const [providerID, modelID] = (state.model || '').split('::');
-    state.messages.push({ info: { id: 'tmp', role: 'user' }, parts: [{ type: 'text', text }] });
+    state.messages.push({ info: { id: 'tmp', role: 'user' }, parts: [...(text ? [{ type: 'text', text }] : []), ...images.map((a) => ({ type: 'file', mime: 'image/*', url: a.url, filename: a.name }))] });
     state.busyGrace = Date.now() + 5000;
     setBusy(true);
     renderMessages(true);
     await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/send`, {
       text,
+      images: images.length ? images : undefined,
       model: providerID && modelID ? { providerID, modelID } : undefined,
     });
     scheduleRefresh();
@@ -1084,7 +1133,8 @@ async function submitInput() {
     try { await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/abort`); loadQueue(); } catch (e) { toast(e.message, 'err'); }
     return;
   }
-  if (!text.trim() || !state.project) return;
+  if ((!text.trim() && !state.attach.length) || !state.project) return;
+  if (state.busy && state.attach.length) { toast('Las imágenes solo se pueden enviar cuando OpenCode no está trabajando. Espera a que termine o quítalas.', 'err'); return; }
   if (state.busy) {
     // OpenCode está ocupado: el mensaje espera en la cola del servidor
     const [providerID, modelID] = (state.model || '').split('::');
@@ -1097,10 +1147,12 @@ async function submitInput() {
     } catch (e) { toast(e.message, 'err'); }
     return;
   }
+  const images = state.attach;
   input.value = '';
+  state.attach = [];
   autosize(input);
-  updateSendButton();
-  await sendMessage(text);
+  renderAttach();
+  await sendMessage(text, images);
 }
 
 function autosize(el) {
@@ -1810,6 +1862,10 @@ function bindShell() {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submitInput(); }
   });
   $('#send').addEventListener('click', submitInput);
+  $('#attach-btn').addEventListener('click', () => $('#attach-file').click());
+  $('#attach-file').addEventListener('change', async (e) => { const f = [...e.target.files]; e.target.value = ''; await addImages(f); });
+  $('#attach-row').addEventListener('click', (e) => { const b = e.target.closest('.thumb-x'); if (b) { state.attach.splice(Number(b.dataset.i), 1); renderAttach(); } });
+  input.addEventListener('paste', (e) => { const f = [...(e.clipboardData?.files || [])].filter((x) => x.type.startsWith('image/')); if (f.length) { e.preventDefault(); addImages(f); } });
 
   // Botón "ir al final" cuando el usuario se aleja del último mensaje
   const chat = $('#chat');
