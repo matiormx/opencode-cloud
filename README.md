@@ -171,6 +171,24 @@ npm start            # http://127.0.0.1:3000, datos en ./data
 
 Requiere `opencode` en el PATH (o `OPENCODE_BIN=/ruta/a/opencode`) y Node ≥ 20.11.
 
+## Varios usuarios (opcional)
+
+Puedes dar acceso a más personas, cada una con **su propio espacio aislado**: su usuario de Linux, su OpenCode, sus proyectos, sus claves de API y su token de GitHub. Un usuario no puede leer los archivos, claves ni procesos de otro.
+
+1. **Una sola vez, por SSH:** `sudo /opt/opencode-cloud/deploy/multiuser.sh setup`. Tu cuenta sigue funcionando igual: usuario `admin` y tu contraseña de siempre, con tus proyectos de siempre.
+2. En la WebUI: **Ajustes → Usuarios**: crea usuarios (nombre y contraseña, o «Generar contraseña»), cambia contraseñas, desactívalos, reinicia su espacio o elimínalos (archivando o borrando sus archivos). Solo el administrador crea usuarios; no hay registro libre.
+3. Los usuarios entran con su usuario y contraseña. Cada uno gestiona sus propias claves y su token de GitHub; las actualizaciones de la app, la salida WireGuard y la actualización de OpenCode las gestiona el administrador.
+
+Cómo funciona: la app que ya tienes pasa a ser la **pasarela** (login, usuarios y proxy). Cada usuario ejecuta su propia copia de la app y de OpenCode como servicio systemd (`opencode-cloud-user@<usuario>`) con su usuario de Linux (`ocu-<usuario>`, uid 61000+), sus datos en `/var/lib/opencode-users/<usuario>` (modo 700) y un servidor que solo acepta peticiones de la pasarela (secreto propio, en `/etc/opencode-cloud/instances`, solo legible por ese usuario). Los servicios se endurecen con `ProtectHome`, `ProtectProc=invisible` y `PrivateTmp`. Como en el modo de un solo usuario, el administrador es de confianza: su OpenCode corre con el usuario del servicio, que **no** puede leer las carpetas de los demás usuarios (esas son de cada `ocu-<usuario>`).
+
+Detalles:
+- **Seguridad:** la WebUI no es root. Pide crear/borrar usuarios a un ayudante de root (`opencode-multiuser.path`) que valida el nombre con una lista cerrada y usa una copia del script en `/usr/local/lib/opencode-cloud` que la app no puede modificar.
+- **Permisos de OpenCode de cada usuario:** por defecto piden permiso (`OC_PERMISSION=ask`). Se puede cambiar en `/etc/opencode-cloud/instances/<usuario>.env` y reiniciando su espacio.
+- **Memoria:** cada espacio ejecuta su propia app y su OpenCode (del orden de 150-300 MB por usuario activo).
+- **Actualizaciones:** al actualizar desde la WebUI, todos los espacios se reinician con la versión nueva. Si cambia `deploy/multiuser.sh`, vuelve a ejecutar `setup` (la WebUI avisa).
+- **WireGuard:** el rango de uids de los usuarios también sale por el túnel; si ya lo tenías configurado, vuelve a ejecutar `egress.sh setup` y guarda la configuración otra vez.
+- **Volver atrás:** `sudo deploy/multiuser.sh disable` desactiva el modo (los espacios y sus datos se conservan); `multiuser.sh status` los lista.
+
 ## Comprobar la instalación
 
 `sudo /opt/opencode-cloud/deploy/doctor.sh` revisa (sin cambiar nada) el sistema, el servicio, la WebUI, OpenCode, Caddy, WireGuard, los permisos de archivos y los cambios locales, y te dice qué corregir. Si la WebUI no arranca: `journalctl -u opencode-cloud -n 60 --no-pager`.
@@ -189,5 +207,5 @@ Requiere `opencode` en el PATH (o `OPENCODE_BIN=/ruta/a/opencode`) y Node ≥ 20
 server/   backend Express (auth, proyectos, git, GitHub, proxy a OpenCode, actualizador)
 public/   WebUI sin build (HTML + JS + CSS)
 bin/      set-password.js, git-askpass.sh
-deploy/   install.sh, doctor.sh (diagnóstico), egress.sh (túnel WireGuard opcional)
+deploy/   install.sh, doctor.sh (diagnóstico), egress.sh (túnel WireGuard opcional), multiuser.sh (varios usuarios opcional)
 ```

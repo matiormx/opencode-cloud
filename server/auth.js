@@ -10,6 +10,19 @@ const scrypt = (password, salt) =>
     crypto.scrypt(password, salt, 64, { N: 16384, r: 8, p: 1 }, (err, key) => (err ? reject(err) : resolve(key))),
   );
 
+export async function hashPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const key = await scrypt(password, salt);
+  return { salt: salt.toString('hex'), hash: key.toString('hex') };
+}
+
+export async function checkPassword(password, rec) {
+  if (!rec?.salt || !rec?.hash || typeof password !== 'string') return false;
+  const key = await scrypt(password, Buffer.from(rec.salt, 'hex'));
+  const expected = Buffer.from(rec.hash, 'hex');
+  return key.length === expected.length && crypto.timingSafeEqual(key, expected);
+}
+
 export function hasPassword() {
   return Boolean(store.load('auth', {}).hash);
 }
@@ -18,20 +31,12 @@ export async function setPassword(password) {
   if (typeof password !== 'string' || password.length < 8) {
     throw Object.assign(new Error('La contraseña debe tener al menos 8 caracteres'), { status: 400 });
   }
-  const salt = crypto.randomBytes(16);
-  const key = await scrypt(password, salt);
-  store.save('auth', { salt: salt.toString('hex'), hash: key.toString('hex') });
-  // Invalida todas las sesiones abiertas
-  store.save('sessions', {});
+  store.save('auth', await hashPassword(password));
+  // Invalida las sesiones del administrador (en modo de un solo usuario, todas)
+  dropSessions('');
 }
 
-export async function verifyPassword(password) {
-  const { salt, hash } = store.load('auth', {});
-  if (!salt || !hash || typeof password !== 'string') return false;
-  const key = await scrypt(password, Buffer.from(salt, 'hex'));
-  const expected = Buffer.from(hash, 'hex');
-  return key.length === expected.length && crypto.timingSafeEqual(key, expected);
-}
+export const verifyPassword = (password) => checkPassword(password, store.load('auth', {}));
 
 // ---- Limitador de intentos de login (por IP) ----
 const attempts = new Map();
@@ -57,18 +62,27 @@ export function registerFailure(ip) {
 export const clearFailures = (ip) => attempts.delete(ip);
 
 // ---- Sesiones ----
+// Cada sesión guarda su caducidad y el usuario ('' = administrador/propietario). El formato antiguo era solo la caducidad.
+const norm = (v) => (typeof v === 'number' ? { exp: v, user: '' } : v);
+
 function pruneSessions(sessions) {
   const now = Date.now();
-  for (const [k, exp] of Object.entries(sessions)) if (exp < now) delete sessions[k];
+  for (const [k, v] of Object.entries(sessions)) if (!v || norm(v).exp < now) delete sessions[k];
   return sessions;
 }
 
-export function createSession() {
+export function createSession(user = '') {
   const token = crypto.randomBytes(32).toString('hex');
   const sessions = pruneSessions(store.load('sessions', {}));
-  sessions[sha256(token)] = Date.now() + config.sessionDays * 86400 * 1000;
+  sessions[sha256(token)] = { exp: Date.now() + config.sessionDays * 86400 * 1000, user };
   store.save('sessions', sessions);
   return token;
+}
+
+export function dropSessions(user) {
+  const sessions = store.load('sessions', {});
+  for (const [k, v] of Object.entries(sessions)) if (norm(v).user === user) delete sessions[k];
+  store.save('sessions', sessions);
 }
 
 function parseCookies(header = '') {
@@ -80,11 +94,28 @@ function parseCookies(header = '') {
   return out;
 }
 
-export function isAuthenticated(req) {
+// Sesión válida de la petición: { user } ('' = administrador) o null
+export function sessionInfo(req) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
-  if (!token) return false;
-  const exp = store.load('sessions', {})[sha256(token)];
-  return Boolean(exp && exp > Date.now());
+  if (!token) return null;
+  const v = store.load('sessions', {})[sha256(token)];
+  if (!v) return null;
+  const s = norm(v);
+  return s.exp > Date.now() ? { user: s.user } : null;
+}
+
+// En modo instancia no hay login: solo se aceptan las peticiones que traen el secreto de la pasarela
+function fromGateway(req) {
+  const got = req.headers['x-oc-gateway'];
+  if (typeof got !== 'string' || !got) return false;
+  const a = crypto.createHash('sha256').update(got).digest();
+  const b = crypto.createHash('sha256').update(config.instanceSecret).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+export function isAuthenticated(req) {
+  if (config.instance) return fromGateway(req);
+  return Boolean(sessionInfo(req));
 }
 
 export function destroySession(req) {

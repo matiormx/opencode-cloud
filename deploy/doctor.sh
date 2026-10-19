@@ -95,6 +95,22 @@ if [ -f /etc/wireguard/ocegress.conf ]; then
 else echo "  (no configurado)"; fi
 systemctl is-active --quiet opencode-egress.path 2>/dev/null && ok "Ayudante de WireGuard instalado" || true
 
+sec "Multiusuario (opcional)"
+if grep -q '^MULTIUSER=1' "$ENV_FILE" 2>/dev/null; then
+  ok "Modo multiusuario activado"
+  systemctl is-active --quiet opencode-multiuser.path && ok "Ayudante de usuarios instalado" || bad "Falta el ayudante: sudo $APP_DIR/deploy/multiuser.sh setup"
+  [ -x /usr/local/lib/opencode-cloud/opencode ] && ok "OpenCode compartido presente" || bad "Falta /usr/local/lib/opencode-cloud/opencode (sudo $APP_DIR/deploy/multiuser.sh setup)"
+  if [ -s /etc/opencode-cloud/instances/index ]; then
+    while read -r n i; do
+      [ -n "$n" ] || continue
+      p=$((3100 + i)); st="$(systemctl is-active "opencode-cloud-user@$n" 2>/dev/null)"
+      c="$(curl -s -o /dev/null -m 3 -w '%{http_code}' "http://127.0.0.1:$p/api/health" || true)"
+      if [ "$st" = active ] && [ "$c" = 200 ]; then ok "Espacio de $n en marcha (puerto $p)"
+      else warn "Espacio de $n: servicio $st, web HTTP ${c:-000}"; hint "journalctl -u opencode-cloud-user@$n -n 30 --no-pager   ·   sudo systemctl restart opencode-cloud-user@$n"; fi
+    done < /etc/opencode-cloud/instances/index
+  else echo "  (aún no hay usuarios)"; fi
+else echo "  (no activado)"; fi
+
 sec "Conexión a GitHub"
 c="$(runuser -u "$APP_USER" -- curl -s -o /dev/null -m 8 -w '%{http_code}' https://api.github.com 2>/dev/null)"
 [ "$c" = 200 ] && ok "$APP_USER llega a GitHub" || warn "$APP_USER no llega a GitHub (HTTP ${c:-000})"

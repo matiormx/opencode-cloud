@@ -423,3 +423,9 @@ table.kv th[scope=row] { font-weight: 500; color: var(--muted); width: 42%; }
 .wait-pat { display: block; max-height: 4.2em; overflow: auto; padding: 6px 8px; border-radius: 8px; background: var(--code-bg); font: 12.5px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .wait-btns { margin-top: 2px; flex-wrap: wrap; }
 .wait-btns .btn { flex: 1 1 auto; }
+
+/* Multiusuario */
+.who { font-size: 12.5px; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who strong { color: var(--text); font-weight: 600; }
+.user-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.user-row:last-child { border-bottom: 0; }

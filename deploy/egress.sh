@@ -27,6 +27,7 @@ MTU="${MTU:-1380}"
 SERVICE=opencode-cloud
 ENV_FILE="${ENV_FILE:-/etc/$SERVICE.env}"
 TABLE=51820
+USER_UIDS="${USER_UIDS:-61000-61999}"   # uids de los usuarios del modo multiusuario
 PRIO=100
 WG_DIR="${WG_DIR:-/etc/wireguard}"
 CONF="$WG_DIR/$IFACE.conf"
@@ -126,16 +127,26 @@ build_conf() {
   ka="$(printf '%s\n' "$parsed" | sed -n 's/^KA //p')"
   [[ "$addr" == *:* && "$aips" == *::/0* ]] && has6=1
 
-  local up down
-  up="ip route replace default dev %i table $TABLE; ip rule add uidrange $uid-$uid lookup $TABLE priority $PRIO"
-  down="ip rule del uidrange $uid-$uid lookup $TABLE priority $PRIO || true; ip route flush table $TABLE || true"
+  # Se enruta el usuario del servicio y, en modo multiusuario, el rango de uids de los usuarios (deploy/multiuser.sh)
+  local ranges="$uid-$uid $USER_UIDS" r up="ip route replace default dev %i table $TABLE" down=""
+  for r in $ranges; do
+    up="$up; ip rule add uidrange $r lookup $TABLE priority $PRIO"
+    down="$down${down:+; }ip rule del uidrange $r lookup $TABLE priority $PRIO || true"
+  done
+  down="$down; ip route flush table $TABLE || true"
   if [ "$has6" = 1 ]; then
-    up="$up; ip -6 route replace default dev %i table $TABLE; ip -6 rule add uidrange $uid-$uid lookup $TABLE priority $PRIO"
-    down="$down; ip -6 rule del uidrange $uid-$uid lookup $TABLE priority $PRIO || true; ip -6 route flush table $TABLE || true"
+    up="$up; ip -6 route replace default dev %i table $TABLE"
+    for r in $ranges; do
+      up="$up; ip -6 rule add uidrange $r lookup $TABLE priority $PRIO"
+      down="$down; ip -6 rule del uidrange $r lookup $TABLE priority $PRIO || true"
+    done
+    down="$down; ip -6 route flush table $TABLE || true"
   else
-    # Sin IPv6 en el túnel: se corta v6 para ese usuario y las apps caen a IPv4 (que sí va por el túnel)
-    up="$up; ip -6 rule add uidrange $uid-$uid unreachable priority $PRIO || true"
-    down="$down; ip -6 rule del uidrange $uid-$uid unreachable priority $PRIO || true"
+    # Sin IPv6 en el túnel: se corta v6 para esos usuarios y las apps caen a IPv4 (que sí va por el túnel)
+    for r in $ranges; do
+      up="$up; ip -6 rule add uidrange $r unreachable priority $PRIO || true"
+      down="$down; ip -6 rule del uidrange $r unreachable priority $PRIO || true"
+    done
   fi
 
   mkdir -p "$WG_DIR"; chmod 700 "$WG_DIR"

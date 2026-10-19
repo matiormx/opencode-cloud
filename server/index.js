@@ -8,19 +8,24 @@ import * as auth from './auth.js';
 import { config } from './config.js';
 import * as egress from './egress.js';
 import * as git from './git.js';
+import * as gateway from './gateway.js';
 import * as gh from './github.js';
+import * as instances from './instances.js';
 import * as oc from './opencode.js';
 import * as queue from './queue.js';
 import * as reqmon from './reqmon.js';
 import * as sysmon from './sysmon.js';
 import * as store from './store.js';
 import * as updater from './updater.js';
+import * as users from './users.js';
 
 const fsp = fs.promises;
 
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 'loopback');
+// Modo multiusuario: las peticiones de los usuarios que no son el administrador se reenvían a su espacio sin leer el cuerpo
+app.use('/api', gateway.proxy);
 app.use(express.json({ limit: '2mb' }));
 
 app.use((req, res, next) => {
@@ -56,23 +61,34 @@ const router = express.Router();
 // ---------- Público ----------
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+const meInfo = (req) => {
+  const info = auth.sessionInfo(req);
+  if (!info || (info.user && !users.isActive(info.user))) return null;
+  return { name: info.user || (config.multiuser ? users.ownerName() : 'admin'), role: info.user ? 'user' : 'admin' };
+};
+
 app.get('/api/me', (req, res) => {
-  res.json({ authenticated: auth.isAuthenticated(req), passwordSet: auth.hasPassword() });
+  const user = config.instance ? null : meInfo(req);
+  res.json({ authenticated: Boolean(user), passwordSet: auth.hasPassword(), multiuser: config.multiuser, user });
 });
 
 app.post(
   '/api/login',
   wrap(async (req, res) => {
+    if (config.instance) throw fail('No encontrado', 404);
     if (!auth.hasPassword()) throw fail('No hay contraseña configurada. Ejecuta: node bin/set-password.js', 409);
-    auth.checkRate(req.ip);
-    const ok = await auth.verifyPassword(req.body?.password);
-    if (!ok) {
-      auth.registerFailure(req.ip);
-      throw fail('Contraseña incorrecta', 401);
+    const username = config.multiuser ? String(req.body?.username || '').trim().toLowerCase() : users.ownerName();
+    const keys = [req.ip, `u:${username}`];
+    keys.forEach((k) => auth.checkRate(k));
+    const user = await users.authenticate(username, req.body?.password);
+    if (!user) {
+      keys.forEach((k) => auth.registerFailure(k));
+      throw fail(config.multiuser ? 'Usuario o contraseña incorrectos' : 'Contraseña incorrecta', 401);
     }
-    auth.clearFailures(req.ip);
-    auth.setCookie(res, auth.createSession());
-    res.json({ ok: true });
+    keys.forEach((k) => auth.clearFailures(k));
+    auth.setCookie(res, auth.createSession(user.role === 'admin' ? '' : user.name));
+    if (user.role !== 'admin') instances.probe(user.name).then((up) => { if (!up) instances.nudge(user.name); });
+    res.json({ ok: true, user });
   }),
 );
 
@@ -83,7 +99,13 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ---------- Protegido ----------
-app.use('/api', auth.requireAuth, router);
+const attachUser = (req, res, next) => {
+  req.sessionUser = config.instance ? '' : auth.sessionInfo(req)?.user ?? '';
+  next();
+};
+app.use('/api', auth.requireAuth, attachUser, router);
+const adminOnly = (req, res, next) => (req.sessionUser === '' ? next() : next(fail('Solo el administrador', 403)));
+const multiOnly = (req, res, next) => (config.multiuser ? next() : next(fail('El modo multiusuario no está activado', 404)));
 
 // --- Trabajo en curso: qué conversaciones están trabajando, esperando al proveedor o pendientes de permiso ---
 router.get(
@@ -135,8 +157,9 @@ router.get('/system', wrap(async (req, res) => res.json(await sysmon.snapshot(re
 
 // --- Salida a internet (túnel WireGuard opcional) ---
 router.get('/egress', wrap(async (req, res) => res.json(await egress.status({ force: req.query.force === '1' }))));
-router.post('/egress/config', wrap(async (req, res) => res.json(await egress.request('apply', req.body?.conf))));
-router.post('/egress/action', wrap(async (req, res) => {
+const notInstance = (req, res, next) => (config.instance ? next(fail('Lo gestiona el administrador', 403)) : next());
+router.post('/egress/config', notInstance, wrap(async (req, res) => res.json(await egress.request('apply', req.body?.conf))));
+router.post('/egress/action', notInstance, wrap(async (req, res) => {
   const a = String(req.body?.action || '');
   if (!['on', 'off', 'remove'].includes(a)) return res.status(400).json({ error: 'Acción no válida' });
   res.json(await egress.request(a));
@@ -145,7 +168,16 @@ router.post('/egress/action', wrap(async (req, res) => {
 // --- Ajustes ---
 const publicSettings = () => {
   const s = store.getSettings();
-  return { githubTokenSet: Boolean(s.githubToken), gitName: s.gitName, gitEmail: s.gitEmail, ocPermission: config.ocPermission };
+  return {
+    githubTokenSet: Boolean(s.githubToken),
+    gitName: s.gitName,
+    gitEmail: s.gitEmail,
+    ocPermission: config.ocPermission,
+    // Qué puede gestionar este espacio: en el de un usuario, la actualización de la app, la salida WireGuard y OpenCode las gestiona el administrador
+    mode: config.instance ? 'instance' : config.multiuser ? 'owner' : 'single',
+    canAdmin: !config.instance,
+    canManageUsers: config.multiuser,
+  };
 };
 
 router.get('/settings', (req, res) => res.json(publicSettings()));
@@ -203,9 +235,81 @@ router.put(
   '/password',
   wrap(async (req, res) => {
     const { current, next } = req.body || {};
+    if (req.sessionUser) {
+      // Usuario no administrador: su contraseña vive en la pasarela
+      await users.changeOwnPassword(req.sessionUser, current, next);
+      auth.setCookie(res, auth.createSession(req.sessionUser));
+      return res.json({ ok: true });
+    }
     if (!(await auth.verifyPassword(current))) throw fail('La contraseña actual no es correcta', 403);
     await auth.setPassword(next);
-    auth.setCookie(res, auth.createSession());
+    auth.setCookie(res, auth.createSession(''));
+    res.json({ ok: true });
+  }),
+);
+
+// --- Usuarios (solo administrador, modo multiusuario) ---
+router.get(
+  '/users',
+  multiOnly,
+  adminOnly,
+  wrap(async (req, res) => {
+    const list = users.list();
+    await Promise.all(list.map(async (u) => { u.running = u.role === 'admin' ? true : !u.disabled && (await instances.probe(u.name)); }));
+    res.json({ users: list, helper: instances.helperInfo() });
+  }),
+);
+
+router.post(
+  '/users',
+  multiOnly,
+  adminOnly,
+  wrap(async (req, res) => {
+    const name = String(req.body?.name || '').trim().toLowerCase();
+    users.validateName(name);
+    if (!instances.helperInfo().ready) throw fail('El ayudante del sistema no está instalado (sudo deploy/multiuser.sh setup)', 409);
+    await users.create(name, req.body?.password);
+    try {
+      await instances.request('create', name);
+    } catch (e) {
+      users.remove(name);
+      throw e;
+    }
+    res.json({ ok: true, name });
+  }),
+);
+
+const userParam = (req) => {
+  const name = String(req.params.name || '');
+  if (name === users.ownerName() || !users.list().some((u) => u.name === name)) throw fail('Usuario no encontrado', 404);
+  return name;
+};
+
+router.put('/users/:name/password', multiOnly, adminOnly, wrap(async (req, res) => { await users.setPassword(userParam(req), req.body?.password); res.json({ ok: true }); }));
+
+router.put(
+  '/users/:name/disabled',
+  multiOnly,
+  adminOnly,
+  wrap(async (req, res) => {
+    const name = userParam(req);
+    const disabled = Boolean(req.body?.disabled);
+    users.setDisabled(name, disabled);
+    await instances.request(disabled ? 'stop' : 'start', name).catch(() => {});
+    res.json({ ok: true });
+  }),
+);
+
+router.post('/users/:name/restart', multiOnly, adminOnly, wrap(async (req, res) => { await instances.request('restart', userParam(req)); res.json({ ok: true }); }));
+
+router.delete(
+  '/users/:name',
+  multiOnly,
+  adminOnly,
+  wrap(async (req, res) => {
+    const name = userParam(req);
+    await instances.request(req.body?.purge ? 'delete-purge' : 'delete', name);
+    users.remove(name);
     res.json({ ok: true });
   }),
 );
@@ -621,6 +725,7 @@ router.get(
 router.post('/opencode/restart', wrap(async (req, res) => { await oc.restart(); res.json({ ok: true }); }));
 router.post(
   '/opencode/upgrade',
+  notInstance,
   wrap(async (req, res) => {
     const output = await oc.upgrade();
     await oc.restart();
@@ -630,8 +735,9 @@ router.post(
 
 // --- Actualizaciones de esta aplicación (desde GitHub) ---
 router.get('/update/status', wrap(async (req, res) => res.json(await updater.check({ refresh: req.query.refresh === '1' }))));
-router.post('/update/apply', wrap(async (req, res) => res.json(await updater.apply())));
-router.post('/update/rollback', wrap(async (req, res) => res.json(await updater.rollback())));
+// Tras actualizar el código, los espacios de los usuarios también se reinician para usar la versión nueva
+router.post('/update/apply', notInstance, wrap(async (req, res) => { const r = await updater.apply(); if (config.multiuser) instances.fire('restart-all'); res.json(r); }));
+router.post('/update/rollback', notInstance, wrap(async (req, res) => { const r = await updater.rollback(); if (config.multiuser) instances.fire('restart-all'); res.json(r); }));
 
 // ---------- Errores ----------
 app.use('/api', (req, res) => res.status(404).json({ error: 'No encontrado' }));
@@ -644,14 +750,14 @@ app.use((err, req, res, next) => {
 
 // ---------- Arranque ----------
 oc.start();
-updater.startPeriodicCheck();
+if (!config.instance) updater.startPeriodicCheck();
 queue.start();
 sysmon.start();
 reqmon.start();
 
 const server = app.listen(config.port, config.host, () => {
-  console.log(`opencode-cloud escuchando en http://${config.host}:${config.port}  (datos: ${config.dataDir})`);
-  if (!auth.hasPassword()) console.warn('AVISO: no hay contraseña. Ejecuta: node bin/set-password.js "<contraseña>"');
+  console.log(`opencode-cloud escuchando en http://${config.host}:${config.port}  (datos: ${config.dataDir})${config.instance ? ` [espacio de ${config.instanceUser || 'usuario'}]` : config.multiuser ? ' [multiusuario]' : ''}`);
+  if (!config.instance && !auth.hasPassword()) console.warn('AVISO: no hay contraseña. Ejecuta: node bin/set-password.js "<contraseña>"');
 });
 
 async function shutdown() {

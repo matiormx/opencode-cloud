@@ -2,6 +2,8 @@ import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const dataDir = path.resolve(process.env.DATA_DIR || path.join(ROOT, 'data'));
+// Modo instancia: este proceso es el espacio de un usuario y solo acepta peticiones de la pasarela (que conoce el secreto)
+const instanceSecret = process.env.INSTANCE_SECRET || '';
 
 export const config = {
   root: ROOT,
@@ -17,5 +19,10 @@ export const config = {
   updateBranch: process.env.UPDATE_BRANCH || 'main',
   // Hosts a los que se puede enviar el token de GitHub (separados por comas)
   gitHosts: (process.env.GIT_ALLOWED_HOSTS || 'github.com').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  // Modo multiusuario (pasarela): login con usuario y proxy hacia el espacio de cada usuario. Lo activa deploy/multiuser.sh
+  multiuser: process.env.MULTIUSER === '1' && !instanceSecret,
+  instance: Boolean(instanceSecret),
+  instanceSecret,
+  instanceUser: process.env.INSTANCE_USER || '',
   sessionDays: Number(process.env.SESSION_DAYS) || 7,
 };

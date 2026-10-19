@@ -26,6 +26,7 @@ async function readVersion() {
 }
 
 export async function current() {
+  if (config.instance) return { supported: false, version: await readVersion(), reason: 'Las actualizaciones las gestiona el administrador' };
   const repo = await git.isRepo(cwd);
   if (!repo) return { supported: false, version: await readVersion(), reason: 'La aplicación no está instalada desde un repositorio git' };
   const head = await git.run(['rev-parse', '--short', 'HEAD'], { cwd, allowFail: true });

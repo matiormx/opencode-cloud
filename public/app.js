@@ -74,6 +74,8 @@ const fmtDate = (ms) => new Date(ms).toLocaleString('es-ES', { day: 'numeric', m
 
 /* ============================== Estado ============================== */
 const state = {
+  me: null, // { name, role } del usuario con sesión
+  multiuser: false,
   projects: [],
   project: null,
   sessions: [],
@@ -155,19 +157,27 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
 /* ============================== Login ============================== */
 function showLogin() {
   closeEvents();
+  const multi = state.multiuser;
+  let last = '';
+  try { last = localStorage.getItem('lastUser') || ''; } catch { /* sin almacenamiento */ }
   $('#root').innerHTML = `
     <div class="login"><form class="login-card" id="login-form">
       <div class="logo">${ico(I.code, 'stroke="#fff" stroke-width="2.4"')}</div>
       <h1>OpenCode Cloud</h1>
       <p class="muted" style="margin:0 0 20px">Inicia sesión para continuar</p>
-      <div class="field"><label for="pw">Contraseña</label><input id="pw" type="password" autocomplete="current-password" autofocus required></div>
+      ${multi ? `<div class="field"><label for="un">Usuario</label><input id="un" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(last)}" ${last ? '' : 'autofocus'} required></div>` : ''}
+      <div class="field"><label for="pw">Contraseña</label><input id="pw" type="password" autocomplete="current-password" ${multi && !last ? '' : 'autofocus'} required></div>
       <button class="btn primary" style="width:100%" type="submit">Entrar</button>
     </form></div>`;
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = $('button', e.target);
     try {
-      await busyBtn(btn, 'Entrando…', () => api('POST', '/api/login', { password: $('#pw').value }));
+      const body = { password: $('#pw').value };
+      if (multi) body.username = $('#un').value.trim().toLowerCase();
+      const r = await busyBtn(btn, 'Entrando…', () => api('POST', '/api/login', body));
+      state.me = r.user || null;
+      if (multi) { try { localStorage.setItem('lastUser', body.username); } catch { /* sin almacenamiento */ } }
       await mountApp();
     } catch (err) {
       toast(err.message, 'err');
@@ -623,6 +633,7 @@ function renderSidebar() {
       <div id="sysmon-slot">${sysCardHtml()}</div>
       ${installPromptEvent && !isStandalone() ? `<button class="install-pill" data-act="install-app"><span>${ico(I.down, 'width="16" height="16"')}</span><span><strong>Instalar aplicación</strong><br><span class="muted">Añádela a tu pantalla de inicio</span></span></button>` : ''}
       ${upd?.behind ? `<button class="update-pill" data-act="settings" data-section="update"><span class="dot"></span><span><strong>Actualización disponible</strong><br><span class="muted">${upd.behind} cambio${upd.behind > 1 ? 's' : ''} nuevo${upd.behind > 1 ? 's' : ''} en GitHub</span></span></button>` : ''}
+      ${state.multiuser && state.me ? `<div class="who muted">Sesión de <strong>${esc(state.me.name)}</strong>${state.me.role === 'admin' ? ' · administrador' : ''}</div>` : ''}
       <div class="row">
         <button class="btn grow" data-act="settings">${ico(I.gear, 'width="16" height="16"')} Ajustes</button>
         <button class="icon-btn" data-act="logout" title="Cerrar sesión">${ico(I.logout)}</button>
@@ -1368,6 +1379,8 @@ async function settingsModal(section) {
     api('GET', '/api/egress').catch(() => null),
   ]);
   let eg = eg0;
+  const canAdmin = settings.canAdmin !== false; // en el espacio de un usuario, actualizaciones, WireGuard y OpenCode los gestiona el administrador
+  let usersData = settings.canManageUsers ? await api('GET', '/api/users').catch(() => null) : null;
   state.update = upd;
   renderSidebar();
 
@@ -1429,6 +1442,40 @@ async function settingsModal(section) {
       <p class="muted" style="font-size:12.5px;margin:8px 0 0">La clave privada se guarda solo en el VPS (<code>/etc/wireguard</code>, solo root) y no vuelve a mostrarse. Tu servidor de casa debe permitir <code>0.0.0.0/0</code>, reenviar paquetes y hacer NAT.</p>`;
   };
 
+  const genPass = () => {
+    const al = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const r = crypto.getRandomValues(new Uint32Array(14));
+    return [...r].map((n) => al[n % al.length]).join('');
+  };
+  const usersBlock = () => {
+    const d = usersData;
+    if (!d) return '<p class="muted" style="margin:0">No se pudo cargar la lista de usuarios.</p>';
+    const h = d.helper || {};
+    const warn = !h.ready
+      ? '<div class="banner err" style="margin-bottom:10px">Falta instalar el ayudante del sistema (una sola vez, por SSH):<pre class="code" style="margin:8px 0 0">sudo /opt/opencode-cloud/deploy/multiuser.sh setup</pre></div>'
+      : (h.outdated ? '<div class="banner" style="margin-bottom:10px">El ayudante del sistema está desactualizado. Ejecuta de nuevo <code>sudo /opt/opencode-cloud/deploy/multiuser.sh setup</code>.</div>' : '');
+    const rows = d.users.map((u) => {
+      const chip = u.role === 'admin' ? '<span class="chip">administrador</span>'
+        : u.disabled ? '<span class="chip warn">desactivado</span>'
+          : (u.running ? '<span class="chip" style="color:var(--ok)">en marcha</span>' : '<span class="chip warn">sin responder</span>');
+      const btns = u.role === 'admin' ? '' : `<div class="row wrap" style="margin-top:6px">
+        <button class="btn small" data-u-act="pass" data-u="${esc(u.name)}">Contraseña</button>
+        ${u.disabled ? '' : `<button class="btn small" data-u-act="restart" data-u="${esc(u.name)}">Reiniciar espacio</button>`}
+        <button class="btn small" data-u-act="toggle" data-u="${esc(u.name)}" data-disabled="${u.disabled ? 1 : 0}">${u.disabled ? 'Activar' : 'Desactivar'}</button>
+        <button class="btn small danger" data-u-act="del" data-u="${esc(u.name)}">Eliminar</button></div>`;
+      return `<div class="user-row"><div><strong>${esc(u.name)}</strong> ${chip}</div>${btns}</div>`;
+    }).join('');
+    return `
+      <p class="muted" style="margin-top:0">Cada usuario tiene su propio espacio aislado: su usuario de Linux, su OpenCode, sus proyectos, sus claves de API y su token de GitHub. Solo tú puedes crear usuarios.</p>
+      ${warn}
+      <div id="user-list" style="margin-bottom:12px">${rows}</div>
+      <div class="row wrap">
+        <input id="nu-name" type="text" class="grow" placeholder="Usuario nuevo (minúsculas y números)" maxlength="20" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true">
+        <input id="nu-pass" name="new-user-secret" type="text" class="secret grow" placeholder="Contraseña (mín. 8)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
+      </div>
+      <div class="row wrap" style="margin-top:8px"><button class="btn" id="nu-gen">Generar contraseña</button><button class="btn primary grow" id="nu-create" ${h.ready ? '' : 'disabled'}>Crear usuario</button></div>`;
+  };
+
   m.body.innerHTML = `
     <h3 style="margin-top:0">GitHub</h3>
     <div id="gh-block">
@@ -1464,14 +1511,16 @@ async function settingsModal(section) {
 
     <h3>OpenCode</h3>
     <p style="margin-top:0">Estado: ${oc.healthy ? '<span style="color:var(--ok)">en marcha</span>' : '<span style="color:var(--err)">no responde</span>'}${oc.version ? ` · versión ${esc(oc.version)}` : ''}</p>
-    <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button><button class="btn" id="oc-upgrade">Actualizar OpenCode</button><button class="btn ghost" id="oc-logs">Ver registro</button></div>
+    <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button>${canAdmin ? '<button class="btn" id="oc-upgrade">Actualizar OpenCode</button>' : ''}<button class="btn ghost" id="oc-logs">Ver registro</button></div>
     <div id="oc-logbox"></div>
 
-    <h3 id="sec-egress">Salida a internet (WireGuard)</h3>
+    ${usersData || settings.canManageUsers ? `<h3 id="sec-users">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : ''}
+
+    ${canAdmin ? `<h3 id="sec-egress">Salida a internet (WireGuard)</h3>
     <div id="eg-block">${egressBlock()}</div>
 
     <h3 id="sec-update">Actualizaciones de esta aplicación</h3>
-    <div id="upd-block">${updateBlock()}</div>
+    <div id="upd-block">${updateBlock()}</div>` : ''}
 
     <h3>Aplicación</h3>
     <div id="app-block">${appBlock()}</div>
@@ -1531,6 +1580,52 @@ async function settingsModal(section) {
       eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message); egRefresh(); });
   };
   egBind();
+  const usersRefresh = async () => {
+    usersData = await api('GET', '/api/users').catch(() => usersData);
+    const el = $('#users-block', m.el); if (el) { el.innerHTML = usersBlock(); usersBind(); }
+  };
+  const passModal = (name) => {
+    const pm = openModal(`Nueva contraseña de ${name}`, `
+      <p class="muted" style="margin-top:0">Se cerrará su sesión actual. Cópiala antes de guardar para pasársela.</p>
+      <div class="field"><input id="np" name="reset-secret" type="text" class="secret" placeholder="Mínimo 8 caracteres" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true"></div>
+      <div class="row wrap"><button class="btn" id="np-gen">Generar</button><button class="btn primary grow" id="np-save">Guardar</button></div>`);
+    $('#np-gen', pm.el).addEventListener('click', () => { $('#np', pm.el).value = genPass(); });
+    $('#np-save', pm.el).addEventListener('click', async (e) => {
+      try { await busyBtn(e.target, 'Guardando…', () => api('PUT', `/api/users/${encodeURIComponent(name)}/password`, { password: $('#np', pm.el).value })); toast('Contraseña cambiada'); pm.close(); } catch (err) { toast(err.message, 'err'); }
+    });
+  };
+  const delModal = (name) => {
+    const dm = openModal(`Eliminar a ${name}`, `
+      <p style="margin-top:0">Se detendrá su espacio, se borrará su usuario de Linux y dejará de poder entrar.</p>
+      <label class="row" style="gap:8px;margin-bottom:14px"><input type="checkbox" id="del-purge" style="width:auto"> <span>Borrar también sus proyectos y claves (irreversible). Si no, se archivan en el servidor.</span></label>
+      <button class="btn danger" id="del-go" style="width:100%">Eliminar usuario</button>`);
+    $('#del-go', dm.el).addEventListener('click', async (e) => {
+      try { await busyBtn(e.target, 'Eliminando…', () => api('DELETE', `/api/users/${encodeURIComponent(name)}`, { purge: $('#del-purge', dm.el).checked })); toast('Usuario eliminado'); dm.close(); usersRefresh(); } catch (err) { toast(err.message, 'err'); }
+    });
+  };
+  const usersBind = () => {
+    q('#nu-gen')?.addEventListener('click', () => { q('#nu-pass').value = genPass(); });
+    click('#nu-create', async (b) => {
+      const name = q('#nu-name').value.trim().toLowerCase(); const password = q('#nu-pass').value;
+      await busyBtn(b, 'Creando… (unos segundos)', () => api('POST', '/api/users', { name, password }));
+      toast(`Usuario ${name} creado`); q('#nu-name').value = ''; q('#nu-pass').value = '';
+      await usersRefresh();
+    });
+    m.el.querySelectorAll('[data-u-act]').forEach((btn) => btn.addEventListener('click', async () => {
+      const name = btn.dataset.u; const act = btn.dataset.uAct;
+      try {
+        if (act === 'pass') passModal(name);
+        else if (act === 'del') delModal(name);
+        else if (act === 'restart') { if (!confirm(`Se reiniciará el espacio de ${name}; si está trabajando, se interrumpe. ¿Continuar?`)) return; await busyBtn(btn, 'Reiniciando…', () => api('POST', `/api/users/${encodeURIComponent(name)}/restart`)); toast('Espacio reiniciado'); usersRefresh(); }
+        else if (act === 'toggle') {
+          const disable = btn.dataset.disabled !== '1';
+          if (disable && !confirm(`Se cerrará la sesión de ${name} y se detendrá su espacio (sus datos se conservan). ¿Continuar?`)) return;
+          await busyBtn(btn, '…', () => api('PUT', `/api/users/${encodeURIComponent(name)}/disabled`, { disabled: disable })); usersRefresh();
+        }
+      } catch (err) { toast(err.message, 'err'); }
+    }));
+  };
+  usersBind();
 
   click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.close(); settingsModal(); });
   click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.close(); settingsModal(); });
@@ -1567,7 +1662,7 @@ async function settingsModal(section) {
   click('#app-install', async () => { await installApp(); $('#app-block', m.el).innerHTML = appBlock(); });
   click('#pw-save', async (b) => { await busyBtn(b, 'Guardando…', () => api('PUT', '/api/password', { current: q('#pw-cur').value, next: q('#pw-new').value })); toast('Contraseña cambiada'); q('#pw-cur').value = ''; q('#pw-new').value = ''; });
 
-  if (section === 'update' || section === 'egress') setTimeout(() => q(`#sec-${section}`)?.scrollIntoView({ behavior: 'smooth' }), 50);
+  if (['update', 'egress', 'users'].includes(section)) setTimeout(() => q(`#sec-${section}`)?.scrollIntoView({ behavior: 'smooth' }), 50);
 }
 
 function afterRestart(result, message, modal) {
@@ -1753,6 +1848,8 @@ function bindGestures() {
 (async () => {
   try {
     const me = await api('GET', '/api/me');
+    state.multiuser = Boolean(me.multiuser);
+    state.me = me.user || null;
     if (me.authenticated) await mountApp();
     else showLogin();
   } catch {
