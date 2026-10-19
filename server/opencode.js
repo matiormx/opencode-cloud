@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { config } from './config.js';
+import { mcpConfig } from './extensions.js';
 
 // Contraseña interna entre esta app y `opencode serve` (el servidor de OpenCode solo escucha en 127.0.0.1).
 const password = crypto.randomBytes(24).toString('hex');
@@ -15,6 +16,7 @@ let stopping = false;
 let restarts = 0;
 let startedAt = 0;
 let timer = null;
+let appliedMcp = '{}';
 const logTail = [];
 
 function pushLog(line) {
@@ -32,9 +34,14 @@ export function start() {
   if (child) return;
   stopping = false;
   const env = { ...process.env, OPENCODE_SERVER_PASSWORD: password };
-  if (config.ocPermission === 'allow') {
-    env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ permission: { edit: 'allow', bash: 'allow', webfetch: 'allow' } });
-  }
+  // Configuración que pone esta app (se mezcla con la del usuario): permisos y extensiones MCP (ver extensions.js)
+  const inline = {};
+  if (config.ocPermission === 'allow') inline.permission = { edit: 'allow', bash: 'allow', webfetch: 'allow' };
+  let mcp = {};
+  try { mcp = mcpConfig(); } catch (e) { pushLog(`[opencode-cloud] No se pudieron cargar las extensiones: ${e.message}`); }
+  if (Object.keys(mcp).length) inline.mcp = mcp;
+  appliedMcp = JSON.stringify(mcp);
+  if (Object.keys(inline).length) env.OPENCODE_CONFIG_CONTENT = JSON.stringify(inline);
   const bin = resolveBin();
   startedAt = Date.now();
   const proc = spawn(bin, ['serve', '--port', String(config.opencodePort), '--hostname', '127.0.0.1'], {
@@ -81,6 +88,8 @@ export async function restart() {
 }
 
 export const logs = () => logTail.slice(-60);
+// Extensiones con las que arrancó OpenCode (para saber si hay cambios pendientes de aplicar)
+export const appliedMcpJson = () => appliedMcp;
 export const isRunning = () => Boolean(child);
 
 function buildUrl(p, { directory, query } = {}) {

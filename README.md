@@ -136,6 +136,15 @@ Cómo funciona y por qué es seguro: la WebUI no es root. Deja la petición en u
 
 Si actualizas la aplicación y `deploy/egress.sh` cambia, vuelve a ejecutar `sudo /opt/opencode-cloud/deploy/egress.sh setup` para actualizar el ayudante. Desde la versión 0.8.4 el ayudante incluye un **vigilante** (temporizador de systemd, cada minuto) que reinicia el túnel si se cae —por ejemplo si el DNS no respondía al arrancar o cambió la IP de tu casa— y vuelve a resolver el Endpoint. La WebUI muestra la configuración guardada (servidor y dirección, nunca la clave), el último handshake y un botón **Reconectar**. Ojo: mientras el túnel esté caído, OpenCode no tiene salida a internet (no hay vuelta automática a la IP del VPS); desactívalo desde Ajustes si quieres volver a salir directo. También se puede usar sin WebUI: `egress.sh install cliente.conf | on | off | status | remove`.
 
+## Extensiones (Context7, Playwright y otras)
+
+**Ajustes → Extensiones** es el equivalente a los plugins de Claude Code: servidores MCP que dan herramientas extra a OpenCode. Los cambios se guardan al momento y se aplican con «Aplicar y reiniciar OpenCode». Cada usuario tiene las suyas.
+
+- **Context7:** documentación actualizada de librerías. Es remoto, no instala nada; la clave es opcional (más límite de uso).
+- **Playwright:** OpenCode abre páginas, hace capturas y prueba lo que construye. Necesita Chromium en el VPS, que se instala una vez para todos: por SSH `sudo /opt/opencode-cloud/deploy/browser.sh setup` y después, en la WebUI, **Instalar Chromium** (unos 400 MB, varios minutos; solo el administrador). Corre sin pantalla y con `--no-sandbox` (Ubuntu 24.04 no deja usar el aislamiento interno de Chromium a usuarios normales): úsalo para tus propias páginas.
+- **Otras:** puedes añadir cualquier servidor MCP, remoto (URL y cabeceras) o local (un comando y variables de entorno).
+- Las claves y valores secretos no se vuelven a mostrar en la WebUI. Se guardan en `data/extensions.json` (permisos 600) y se pasan a OpenCode al arrancar; no se toca tu `opencode.json`.
+
 ## Seguridad: léelo antes de exponerlo
 
 Esta aplicación da a un agente de IA acceso a una shell del servidor. Trátala como si fuera una terminal remota.
@@ -207,5 +216,5 @@ Detalles:
 server/   backend Express (auth, proyectos, git, GitHub, proxy a OpenCode, actualizador)
 public/   WebUI sin build (HTML + JS + CSS)
 bin/      set-password.js, git-askpass.sh
-deploy/   install.sh, doctor.sh (diagnóstico), egress.sh (túnel WireGuard opcional), multiuser.sh (varios usuarios opcional)
+deploy/   install.sh, doctor.sh (diagnóstico), egress.sh (túnel WireGuard opcional), multiuser.sh (varios usuarios opcional), browser.sh (Chromium para Playwright, opcional)
 ```

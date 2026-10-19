@@ -7,6 +7,7 @@ import express from 'express';
 import * as auth from './auth.js';
 import { config } from './config.js';
 import * as egress from './egress.js';
+import * as ext from './extensions.js';
 import * as git from './git.js';
 import * as gateway from './gateway.js';
 import * as gh from './github.js';
@@ -171,6 +172,22 @@ router.post('/egress/action', notInstance, wrap(async (req, res) => {
   if (!['on', 'off', 'remove', 'reconnect'].includes(a)) return res.status(400).json({ error: 'Acción no válida' });
   res.json(await egress.request(a));
 }));
+
+// --- Extensiones (servidores MCP: Context7, Playwright y propios) ---
+// Los cambios se guardan al momento y se aplican al reiniciar OpenCode (POST /opencode/restart)
+const extView = async () => {
+  const v = ext.view();
+  let status = null;
+  try { const r = await oc.json('GET', '/mcp', { timeout: 4000 }); if (r && typeof r === 'object' && !Array.isArray(r)) status = r; } catch { /* sin estado */ }
+  return { ...v, restartNeeded: oc.appliedMcpJson() !== JSON.stringify(ext.mcpConfig()), status };
+};
+router.get('/extensions', wrap(async (req, res) => res.json(await extView())));
+router.put('/extensions/context7', wrap(async (req, res) => { ext.setContext7(req.body || {}); res.json(await extView()); }));
+router.put('/extensions/playwright', wrap(async (req, res) => { ext.setPlaywright(req.body || {}); res.json(await extView()); }));
+router.post('/extensions/custom', wrap(async (req, res) => { ext.addCustom(req.body || {}); res.json(await extView()); }));
+router.put('/extensions/custom/:id', wrap(async (req, res) => { ext.setCustom(String(req.params.id), req.body || {}); res.json(await extView()); }));
+router.delete('/extensions/custom/:id', wrap(async (req, res) => { ext.removeCustom(String(req.params.id)); res.json(await extView()); }));
+router.post('/extensions/browser', notInstance, wrap(async (req, res) => { ext.browserRequest(String(req.body?.action || '')); res.json(await extView()); }));
 
 // --- Ajustes ---
 const publicSettings = () => {

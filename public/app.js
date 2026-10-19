@@ -13,6 +13,7 @@ const I = {
   send: '<path d="M12 19V5M5 12l7-7 7 7"/>',
   tconn: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
   tia: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+  tpuz: '<path d="M4 9h3a2 2 0 1 0 0-4h0a2 2 0 1 1 4 0v0H9v4h-.5a2 2 0 1 1 0 4H9v5h5v-1.5a2 2 0 1 1 4 0V18h2v-5h-2a2 2 0 1 1 0-4h2V4h-5v2"/>',
   tusers: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M17 14c2.8 0 5 2.2 5 5"/>',
   tred: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>',
   dots: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
@@ -1596,7 +1597,7 @@ async function settingsModal(section) {
       </details>`;
   };
 
-  const tabs = [['conn', 'Conexiones', I.tconn], ['ia', 'IA y OpenCode', I.tia], ...(canAdmin ? [['users', 'Usuarios', I.tusers], ['red', 'Red', I.tred]] : []), ['sys', canAdmin ? 'Sistema' : 'Cuenta', I.gear]];
+  const tabs = [['conn', 'Conexiones', I.tconn], ['ia', 'IA y OpenCode', I.tia], ['ext', 'Extensiones', I.tpuz], ...(canAdmin ? [['users', 'Usuarios', I.tusers], ['red', 'Red', I.tred]] : []), ['sys', canAdmin ? 'Sistema' : 'Cuenta', I.gear]];
   const secTab = { update: 'sys', egress: 'red', users: 'users' };
   let curTab = secTab[section] || store.get('settingsTab');
   if (!tabs.some(([k]) => k === curTab)) curTab = 'conn';
@@ -1641,6 +1642,12 @@ async function settingsModal(section) {
     <p style="margin-top:0">Estado: ${oc.healthy ? '<span style="color:var(--ok)">en marcha</span>' : '<span style="color:var(--err)">no responde</span>'}${oc.version ? ` · versión ${esc(oc.version)}` : ''}</p>
     <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button>${canAdmin ? '<button class="btn" id="oc-upgrade">Actualizar OpenCode</button>' : ''}<button class="btn ghost" id="oc-logs">Ver registro</button></div>
     <div id="oc-logbox"></div>
+    </div>
+
+    <div class="tabpane" data-pane="ext"${curTab === 'ext' ? '' : ' hidden'}>
+    <h3 style="margin-top:0">Extensiones</h3>
+    <p class="muted" style="margin-top:0">Dan herramientas extra a OpenCode (servidores MCP). Es lo equivalente a los plugins de Claude Code.</p>
+    <div id="ext-block"><p class="muted">Cargando…</p></div>
     </div>
 
     ${canAdmin ? `<div class="tabpane" data-pane="users"${curTab === 'users' ? '' : ' hidden'}>` : ''}
@@ -1825,10 +1832,148 @@ async function settingsModal(section) {
   click('#app-install', async () => { await installApp(); $('#app-block', m.el).innerHTML = appBlock(); });
   click('#pw-save', async (b) => { await busyBtn(b, 'Guardando…', () => api('PUT', '/api/password', { current: q('#pw-cur').value, next: q('#pw-new').value })); toast('Contraseña cambiada'); q('#pw-cur').value = ''; q('#pw-new').value = ''; });
 
+  /* ---- Extensiones (MCP): Context7, Playwright y propias ---- */
+  let ext = null;
+  let extLoading = false;
+  let extTimer = null;
+  const extDraft = { name: '', type: 'remote', url: '', command: '', headers: '', env: '', open: false };
+  const extStatus = (name) => {
+    const s = ext?.status?.[name];
+    if (!s || !s.status) return '';
+    if (s.status === 'connected') return '<span class="chip ok">Conectada</span>';
+    if (s.status === 'failed') return `<span class="chip err">Con error</span>`;
+    if (s.status === 'needs_auth' || s.status === 'needs_client_registration') return '<span class="chip warn">Necesita autorización</span>';
+    return '';
+  };
+  const extFail = (name) => {
+    const s = ext?.status?.[name];
+    return s && s.status === 'failed' && s.error ? `<div class="banner err" style="margin-top:8px">${esc(String(s.error).slice(0, 300))}</div>` : '';
+  };
+  const extSwitch = (key, on, label = 'Activada') => `<label class="switch"><input type="checkbox" data-xsw="${esc(key)}" ${on ? 'checked' : ''}><span>${label}</span></label>`;
+  const playwrightBody = () => {
+    const b = ext.playwright.browser;
+    const risk = '<p class="muted" style="font-size:12.5px;margin:8px 0 0">Chromium se ejecuta sin pantalla y sin su aislamiento interno (Ubuntu 24.04 no lo permite a usuarios normales), así que úsalo para probar tus propias páginas. Cada navegador abierto ocupa unos 300 MB de RAM.</p>';
+    if (b.installing) return `<div class="row" style="gap:8px"><span class="spin"></span><strong>Instalando Chromium…</strong></div><div class="muted" style="font-size:13px;margin-top:4px">${esc(b.message || '')}</div>${b.log.length ? `<div class="output" style="margin-top:8px;max-height:120px;overflow:auto;font-size:11.5px">${esc(b.log.join('\n'))}</div>` : ''}`;
+    const err = b.error ? `<div class="banner err" style="margin:0 0 10px">${esc(b.error)}</div>` : '';
+    if (b.installed) {
+      return `${err}<p style="margin:0">Chromium listo · Playwright MCP ${esc(b.version || '')}</p>${ext.canInstallBrowser && b.helper ? '<div class="row wrap" style="margin-top:8px"><button class="btn small" data-x="browser-install">Actualizar</button><button class="btn small danger" data-x="browser-remove">Desinstalar</button></div>' : ''}${risk}`;
+    }
+    if (!ext.canInstallBrowser) return `${err}<div class="hint">Chromium todavía no está instalado en el servidor. Pídele al administrador que lo instale desde Ajustes → Extensiones.</div>`;
+    if (!b.helper) return `${err}<div class="hint">Instala una vez el ayudante por SSH en el VPS y vuelve a abrir los ajustes:${cmdBox('sudo /opt/opencode-cloud/deploy/browser.sh setup', 'margin-top:8px')}</div>`;
+    return `${err}<p class="muted" style="margin:0 0 8px">Hay que instalar Chromium y sus librerías (unos 400 MB y varios minutos). Se instala una vez para todos los usuarios.</p><button class="btn primary" data-x="browser-install">Instalar Chromium</button>`;
+  };
+  const extBlock = () => {
+    if (!ext) return '<p class="muted">Cargando…</p>';
+    const c7 = ext.context7;
+    const pw = ext.playwright;
+    const customRows = ext.custom.map((c) => `<div class="ext-row"><div class="grow" style="min-width:0"><strong>${esc(c.name)}</strong> <span class="chip">${c.type === 'remote' ? 'remota' : 'local'}</span> ${extStatus(c.name)}<div class="muted mono ext-target">${esc(c.target)}</div>${c.headerNames.length || c.envNames.length ? `<div class="muted" style="font-size:12px">${c.headerNames.length ? `Cabeceras: ${c.headerNames.map(esc).join(', ')}` : ''}${c.envNames.length ? ` Variables: ${c.envNames.map(esc).join(', ')}` : ''}</div>` : ''}${extFail(c.name)}</div>${extSwitch(`custom:${c.id}`, c.enabled, 'Activa')}<button class="btn small danger" data-x="custom-del" data-id="${esc(c.id)}" data-name="${esc(c.name)}">Quitar</button></div>`).join('');
+    return `
+      ${ext.restartNeeded ? '<div class="banner" style="margin-bottom:12px"><strong>Hay cambios sin aplicar.</strong> OpenCode debe reiniciarse para usarlos.<div class="row" style="margin-top:8px"><button class="btn primary small" data-x="apply">Aplicar y reiniciar OpenCode</button></div></div>' : ''}
+      <div class="ext-card">
+        <div class="row" style="gap:8px;align-items:center"><div class="grow"><strong>Context7</strong> ${extStatus('context7')}<div class="muted" style="font-size:13px">Documentación actualizada de librerías y frameworks, para que OpenCode no use APIs antiguas.</div></div>${extSwitch('context7', c7.enabled)}</div>
+        <div class="row wrap" style="margin-top:10px"><input id="c7-key" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" placeholder="${c7.hasKey ? 'Clave guardada · escribe para cambiar' : 'Clave de Context7 (opcional, más límite)'}"><button class="btn" data-x="c7-save">Guardar</button>${c7.hasKey ? '<button class="btn danger" data-x="c7-clear">Quitar clave</button>' : ''}</div>
+        ${extFail('context7')}
+      </div>
+      <div class="ext-card">
+        <div class="row" style="gap:8px;align-items:center"><div class="grow"><strong>Playwright</strong> ${extStatus('playwright')}<div class="muted" style="font-size:13px">OpenCode puede abrir páginas web, hacer capturas y probar lo que construye.</div></div>${extSwitch('playwright', pw.enabled)}</div>
+        <div style="margin-top:10px">${playwrightBody()}</div>
+        ${extFail('playwright')}
+      </div>
+      <h3>Otras extensiones</h3>
+      ${customRows ? `<div class="ext-card" style="padding-top:2px;padding-bottom:2px">${customRows}</div>` : '<p class="muted" style="margin-top:0">Añade cualquier servidor MCP: remoto (una URL) o local (un comando que se ejecuta en tu espacio).</p>'}
+      <details class="nu-box" id="ext-new" ${extDraft.open ? 'open' : ''}><summary>Añadir una extensión</summary>
+        <div class="stack" style="margin-top:10px">
+          <input id="xn-name" type="text" placeholder="Nombre (p. ej. github, notion)" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(extDraft.name)}">
+          <select id="xn-type"><option value="remote"${extDraft.type === 'remote' ? ' selected' : ''}>Remota (URL)</option><option value="local"${extDraft.type === 'local' ? ' selected' : ''}>Local (comando)</option></select>
+          <div id="xn-remote"${extDraft.type === 'remote' ? '' : ' hidden'} class="stack"><input id="xn-url" type="url" placeholder="https://servidor.ejemplo.com/mcp" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(extDraft.url)}"><textarea id="xn-headers" rows="2" placeholder="Cabeceras, una por línea:&#10;Authorization: Bearer …" autocapitalize="off" spellcheck="false">${esc(extDraft.headers)}</textarea></div>
+          <div id="xn-local"${extDraft.type === 'local' ? '' : ' hidden'} class="stack"><input id="xn-command" type="text" placeholder="npx -y @paquete/servidor-mcp" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(extDraft.command)}"><textarea id="xn-env" rows="2" placeholder="Variables, una por línea:&#10;CLAVE=valor" autocapitalize="off" spellcheck="false">${esc(extDraft.env)}</textarea></div>
+          <button class="btn primary" data-x="custom-add">Añadir</button>
+        </div>
+      </details>`;
+  };
+  const drawExt = () => {
+    const box = q('#ext-block');
+    if (!box) return;
+    box.innerHTML = extBlock();
+    clearTimeout(extTimer);
+    // Mientras se instala Chromium se consulta el progreso
+    if (ext?.playwright?.browser?.installing && m.el.isConnected) extTimer = setTimeout(() => loadExt(true), 3000);
+  };
+  const loadExt = async (quiet = false) => {
+    if (extLoading) return;
+    extLoading = true;
+    try { ext = await api('GET', '/api/extensions'); drawExt(); }
+    catch (err) { if (!quiet) q('#ext-block').innerHTML = `<div class="banner err">${esc(err.message)}</div>`; }
+    finally { extLoading = false; }
+  };
+  const extDo = async (btn, label, method, url, body) => {
+    try { ext = await busyBtn(btn, label, () => api(method, url, body)); drawExt(); return true; }
+    catch (err) { toast(err.message, 'err'); await loadExt(true); return false; }
+  };
+  const extBox = q('#ext-block');
+  extBox?.addEventListener('input', (e) => {
+    const map = { 'xn-name': 'name', 'xn-url': 'url', 'xn-command': 'command', 'xn-headers': 'headers', 'xn-env': 'env' };
+    if (map[e.target.id]) extDraft[map[e.target.id]] = e.target.value;
+  });
+  extBox?.addEventListener('toggle', (e) => { if (e.target.id === 'ext-new') extDraft.open = e.target.open; }, true);
+  extBox?.addEventListener('change', async (e) => {
+    if (e.target.id === 'xn-type') {
+      extDraft.type = e.target.value;
+      q('#xn-remote').hidden = extDraft.type !== 'remote';
+      q('#xn-local').hidden = extDraft.type !== 'local';
+      return;
+    }
+    const key = e.target.dataset?.xsw;
+    if (!key) return;
+    const on = e.target.checked;
+    const ok = key === 'context7' ? await extDo(e.target, '', 'PUT', '/api/extensions/context7', { enabled: on })
+      : key === 'playwright' ? await extDo(e.target, '', 'PUT', '/api/extensions/playwright', { enabled: on })
+        : await extDo(e.target, '', 'PUT', `/api/extensions/custom/${key.slice(7)}`, { enabled: on });
+    if (!ok) drawExt();
+  });
+  extBox?.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-x]');
+    if (!b) return;
+    const act = b.dataset.x;
+    try {
+      if (act === 'apply') {
+        if (!(await confirmInterrupt('Se reiniciará OpenCode para aplicar las extensiones. ¿Continuar?'))) return;
+        await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart'));
+        await new Promise((r) => setTimeout(r, 2500)); // OpenCode tarda un momento en cargar los servidores MCP
+        await loadExt(true);
+        toast('Extensiones aplicadas');
+      } else if (act === 'c7-save') {
+        const v = q('#c7-key').value.trim();
+        if (!v) return toast('Escribe la clave de Context7', 'err');
+        if (await extDo(b, 'Guardando…', 'PUT', '/api/extensions/context7', { apiKey: v })) toast('Clave guardada');
+      } else if (act === 'c7-clear') {
+        await extDo(b, 'Quitando…', 'PUT', '/api/extensions/context7', { clearKey: true });
+      } else if (act === 'browser-install') {
+        if (!confirm('Se descargarán Chromium y sus librerías (unos 400 MB). Puede tardar varios minutos y no interrumpe a OpenCode. ¿Continuar?')) return;
+        await extDo(b, 'Iniciando…', 'POST', '/api/extensions/browser', { action: 'install' });
+      } else if (act === 'browser-remove') {
+        if (!confirm('Se desinstalará Chromium para todos los usuarios. ¿Continuar?')) return;
+        await extDo(b, 'Quitando…', 'POST', '/api/extensions/browser', { action: 'remove' });
+      } else if (act === 'custom-del') {
+        if (!confirm(`¿Quitar la extensión «${b.dataset.name}»?`)) return;
+        await extDo(b, 'Quitando…', 'DELETE', `/api/extensions/custom/${b.dataset.id}`);
+      } else if (act === 'custom-add') {
+        const body = { name: extDraft.name, type: extDraft.type, url: extDraft.url, command: extDraft.command, headers: extDraft.headers, env: extDraft.env };
+        if (await extDo(b, 'Añadiendo…', 'POST', '/api/extensions/custom', body)) {
+          Object.assign(extDraft, { name: '', url: '', command: '', headers: '', env: '', open: false });
+          drawExt();
+          toast('Extensión añadida. Aplica los cambios para usarla.');
+        }
+      }
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  if (curTab === 'ext') loadExt();
+
   const showTab = (k) => {
     for (const b of m.el.querySelectorAll('.tabbtn')) { const on = b.dataset.tab === k; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }
     for (const pn of m.el.querySelectorAll('.tabpane')) pn.hidden = pn.dataset.pane !== k;
     store.set('settingsTab', k);
+    if (k === 'ext' && !ext) loadExt();
     $('.modal-body', m.el).scrollTop = 0;
     m.el.querySelector('.tabbtn.on')?.scrollIntoView({ inline: 'center', block: 'nearest' });
   };

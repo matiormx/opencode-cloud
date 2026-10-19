@@ -99,6 +99,14 @@ if [ -f /etc/wireguard/ocegress.conf ]; then
   systemctl is-enabled --quiet wg-quick@ocegress 2>/dev/null && ok "El túnel arranca con el sistema" || warn "El túnel no está habilitado en el arranque (¿lo desactivaste?)"
 fi
 
+sec "Extensiones (Context7, Playwright) (opcional)"
+if [ -f /opt/opencode-cloud-mcp/ready.json ]; then
+  ok "Chromium y Playwright MCP instalados ($(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' /opt/opencode-cloud-mcp/ready.json))"
+  [ -x /opt/opencode-cloud-mcp/node_modules/.bin/playwright-mcp ] || bad "Falta el ejecutable playwright-mcp: reinstala desde Ajustes → Extensiones"
+else
+  systemctl is-active --quiet opencode-browser.path 2>/dev/null && ok "Ayudante de Chromium instalado (Chromium aún no instalado: Ajustes → Extensiones)" || echo "  · Sin Playwright (opcional): sudo $APP_DIR/deploy/browser.sh setup"
+fi
+
 sec "Multiusuario (opcional)"
 if grep -q '^MULTIUSER=1' "$ENV_FILE" 2>/dev/null; then
   ok "Modo multiusuario activado"
