@@ -42,6 +42,8 @@ async function api(method, url, body) {
 }
 
 function toast(msg, kind = '') {
+  // Un mismo aviso no se repite mientras sigue en pantalla (al volver de segundo plano se disparaban varios a la vez)
+  if ([...document.querySelectorAll('#toasts .toast')].some((t) => t.textContent === msg)) return;
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
   el.textContent = msg;
@@ -713,7 +715,8 @@ async function selectProject(id) {
 async function loadSessions() {
   if (!state.project) return;
   try {
-    state.sessions = await api('GET', `/api/projects/${state.project.id}/sessions`);
+    const list = await api('GET', `/api/projects/${state.project.id}/sessions`);
+    if (Array.isArray(list)) state.sessions = list;
   } catch (e) {
     toast(`No se pudieron cargar las conversaciones: ${e.message}`, 'err');
   }
@@ -749,6 +752,8 @@ async function refreshMessages(forceScroll = false) {
   try {
     const msgs = await api('GET', `/api/projects/${pid}/sessions/${sid}/messages`);
     if (state.sessionId !== sid) return;
+    // Si OpenCode contesta algo que no es una lista (se está reiniciando, sesión no disponible…) se conserva lo que había
+    if (!Array.isArray(msgs)) return;
     state.messages = msgs;
     renderMessages(forceScroll);
   } catch (e) {

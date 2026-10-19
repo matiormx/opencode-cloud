@@ -506,7 +506,11 @@ router.get(
   }),
 );
 router.post('/projects/:id/sessions', ocRoute((dir, req) => oc.json('POST', '/session', { directory: dir, body: { title: req.body?.title || undefined } })));
-router.get('/projects/:id/sessions/:sid/messages', ocRoute((dir, req) => oc.json('GET', `/session/${sid(req)}/message`, { directory: dir, query: { limit: 300 } })));
+router.get('/projects/:id/sessions/:sid/messages', ocRoute(async (dir, req) => {
+  const r = await oc.json('GET', `/session/${sid(req)}/message`, { directory: dir, query: { limit: 300 } });
+  if (!Array.isArray(r)) throw fail('OpenCode no devolvió la conversación (¿se está reiniciando?). Reintenta en unos segundos.', 502);
+  return r;
+}));
 router.get('/projects/:id/sessions/:sid/diff', ocRoute((dir, req) => oc.json('GET', `/session/${sid(req)}/diff`, { directory: dir })));
 router.patch(
   '/projects/:id/sessions/:sid',
