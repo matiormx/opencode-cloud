@@ -356,7 +356,7 @@ async function mountApp() {
           <div class="queue hidden" id="queue" aria-live="polite"></div>
           <div class="composer">
             <div class="attach-row hidden" id="attach-row"></div>
-            <textarea id="input" rows="1" placeholder="Pide algo a OpenCode…" aria-label="Mensaje"></textarea>
+            <textarea id="input" name="oc-prompt" rows="1" placeholder="Pide algo a OpenCode…" aria-label="Instrucción para OpenCode" enterkeyhint="send" inputmode="text" autocomplete="off" autocapitalize="sentences" autocorrect="on" spellcheck="true" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"></textarea>
             <input type="file" id="attach-file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
             <div class="composer-bar">
               <button class="attach-btn" id="attach-btn" type="button" aria-label="Adjuntar imagen" title="Adjuntar imagen">${ico(I.image)}</button>
@@ -2465,6 +2465,45 @@ function bindGestures() {
     else if (state.navOpen && dx < 0) { state.navOpen = false; applyPanelState(); }
   }, { passive: true });
 }
+
+
+/* ===== Atributos de entrada coherentes con cada campo =====
+   Sin pistas, iOS trata cualquier campo como candidato a código de verificación o a contraseña.
+   Cada campo declara aquí para qué sirve: teclado, mayúsculas, corrector y botón de intro. */
+const FIELD_HINTS = {
+  'input': { enterkeyhint: 'send', autocapitalize: 'sentences', spellcheck: 'true' },
+  'sm-title': { enterkeyhint: 'done', autocapitalize: 'sentences', spellcheck: 'true' },
+  'mp-q': { enterkeyhint: 'search' },
+  'remote-url': { inputmode: 'url', autocapitalize: 'none', spellcheck: 'false', enterkeyhint: 'go' },
+  'np-url': { inputmode: 'url', autocapitalize: 'none', spellcheck: 'false', enterkeyhint: 'next' },
+  'np-name': { autocapitalize: 'sentences', spellcheck: 'true', enterkeyhint: 'next' },
+  'np-branch': { autocapitalize: 'none', spellcheck: 'false', enterkeyhint: 'next' },
+  'np-cname': { autocapitalize: 'sentences', spellcheck: 'true', enterkeyhint: 'done' },
+  'pm-name': { autocapitalize: 'sentences', spellcheck: 'true', enterkeyhint: 'done' },
+  'commit-msg': { autocapitalize: 'sentences', spellcheck: 'true', enterkeyhint: 'done' },
+  'pr-title': { autocapitalize: 'sentences', spellcheck: 'true', enterkeyhint: 'next' },
+  'pr-body': { autocapitalize: 'sentences', spellcheck: 'true' },
+  'g-name': { autocapitalize: 'words', spellcheck: 'false', enterkeyhint: 'next' },
+  'g-email': { autocapitalize: 'none', spellcheck: 'false', enterkeyhint: 'done' },
+  'xn-url': { inputmode: 'url', enterkeyhint: 'next' },
+  'xn-command': { enterkeyhint: 'next' },
+};
+function tuneField(el) {
+  if (el.dataset.tuned) return;
+  el.dataset.tuned = '1';
+  if (el.type === 'checkbox' || el.type === 'radio' || el.type === 'file' || el.type === 'hidden') return;
+  const set = (k, v) => { if (!el.hasAttribute(k)) el.setAttribute(k, v); };
+  // Contraseñas reales del inicio de sesión y del cambio de clave conservan su autocompletado
+  if (!el.hasAttribute('autocomplete')) {
+    set('autocomplete', 'off');
+    set('data-1p-ignore', 'true'); set('data-lpignore', 'true'); set('data-bwignore', 'true');
+  }
+  for (const [k, v] of Object.entries(FIELD_HINTS[el.id] || {})) if (k !== 'inputmode' || !el.hasAttribute('inputmode')) el.setAttribute(k, v);
+  if (el.tagName === 'INPUT' && el.type === 'text' && !el.hasAttribute('autocapitalize')) set('autocapitalize', 'none');
+}
+const tuneAll = (root) => { if (root.matches?.('input,textarea')) tuneField(root); root.querySelectorAll?.('input,textarea').forEach(tuneField); };
+new MutationObserver((list) => { for (const r of list) for (const n of r.addedNodes) if (n.nodeType === 1) tuneAll(n); }).observe(document.body, { childList: true, subtree: true });
+tuneAll(document.body);
 
 /* ============================== Arranque ============================== */
 (async () => {
