@@ -11,6 +11,13 @@ const I = {
   git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 4-6 3-11 5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
   send: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  tconn: '<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
+  tia: '<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+  tusers: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M17 14c2.8 0 5 2.2 5 5"/>',
+  tred: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/>',
+  dots: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  chev: '<path d="M6 9l6 6 6-6"/>',
+  refresh: '<path d="M20 11a8 8 0 0 0-14-4L4 9M4 4v5h5M4 13a8 8 0 0 0 14 4l2-2M20 20v-5h-5"/>',
   image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-9 9"/>',
   stop: '<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/>',
   x: '<path d="M18 6L6 18M6 6l12 12"/>',
@@ -1550,35 +1557,43 @@ async function settingsModal(section) {
     const warn = !h.ready
       ? `<div class="banner err" style="margin-bottom:10px">Falta instalar el ayudante del sistema (una sola vez, por SSH):${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}</div>`
       : (h.outdated ? `<div class="banner" style="margin-bottom:10px">El ayudante del sistema está desactualizado. Ejecuta de nuevo este comando por SSH:${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}</div>` : '');
+    const stat = (u) => {
+      if (u.role === 'admin') return ['', 'Administrador'];
+      if (u.disabled) return ['off', 'Desactivado'];
+      if (!u.running) return ['warn', 'Sin responder'];
+      if (u.activity === 'busy') return ['busy', `Trabajando${u.busy ? ` (${u.busy})` : ''}${u.queued ? ` · ${u.queued} en cola` : ''}`];
+      const seen = u.lastSeen ? seenAgo(u.lastSeen) : 'sin conexión reciente';
+      if (u.activity === 'idle') return ['ok', `Libre · ${seen}`];
+      return ['warn', `Actividad desconocida · ${seen}`];
+    };
     const rows = d.users.map((u) => {
-      const chip = u.role === 'admin' ? '<span class="chip">administrador</span>'
-        : u.disabled ? '<span class="chip warn">desactivado</span>'
-          : (u.running ? `<span class="chip" style="color:var(--ok)">espacio activo</span> ${u.activity === 'busy' ? `<span class="chip warn">trabajando${u.busy ? ` (${u.busy})` : ''}</span>${u.queued ? ` <span class="chip">${u.queued} en cola</span>` : ''}` : u.activity === 'idle' ? '<span class="chip">sin tareas en curso</span>' : '<span class="chip warn">actividad desconocida</span>'}${u.activity !== 'busy' ? ` <span class="muted">${u.lastSeen ? seenAgo(u.lastSeen) : 'sin conexión desde el último reinicio'}</span>` : ''}` : '<span class="chip warn">sin responder</span>');
-      const btns = u.role === 'admin' ? '' : `<div class="row wrap" style="margin-top:6px">
-        <button class="btn small" data-u-act="pass" data-u="${esc(u.name)}">Contraseña</button>
-        ${u.disabled ? '' : `<button class="btn small" data-u-act="restart" data-u="${esc(u.name)}">Reiniciar espacio</button>`}
-        <button class="btn small" data-u-act="toggle" data-u="${esc(u.name)}" data-disabled="${u.disabled ? 1 : 0}">${u.disabled ? 'Activar' : 'Desactivar'}</button>
-        <button class="btn small danger" data-u-act="del" data-u="${esc(u.name)}">Eliminar</button></div>`;
-      return `<div class="user-row"><div><strong>${esc(u.name)}</strong> ${chip}</div>${btns}</div>`;
+      const [k, txt] = stat(u);
+      return `<div class="urow"><div class="uav">${esc(u.name.slice(0, 1).toUpperCase())}</div>
+        <div class="umain"><div class="uname">${esc(u.name)}</div><div class="ustat"><span class="dot ${k}"></span>${esc(txt)}</div></div>
+        ${u.role === 'admin' ? '' : `<button type="button" class="icon-btn" data-u-menu="${esc(u.name)}" aria-label="Acciones de ${esc(u.name)}">${ico(I.dots)}</button>`}</div>`;
     }).join('');
     return `
-      <p class="muted" style="margin-top:0">Cada usuario tiene su propio espacio aislado: su usuario de Linux, su OpenCode, sus proyectos, sus claves de API y su token de GitHub. Solo tú puedes crear usuarios.</p>
-      <div class="row wrap" style="margin-bottom:8px"><button class="btn small" id="users-refresh" type="button">Actualizar actividad</button><span class="muted" style="font-size:12.5px">«Sin tareas en curso» significa que acabo de comprobarlo y OpenCode no está ejecutando nada.</span></div>
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span class="muted" style="font-size:13.5px">Cada usuario tiene su espacio aislado.</span>
+        <button class="icon-btn" id="users-refresh" type="button" aria-label="Actualizar actividad" title="Actualizar actividad">${ico(I.refresh)}</button>
+      </div>
       ${warn}
       <div id="user-list" style="margin-bottom:12px">${rows}</div>
-      <div class="row wrap">
-        <input id="nu-name" type="text" class="grow" placeholder="Usuario nuevo (minúsculas y números)" maxlength="20" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true">
-        <input id="nu-pass" name="new-user-secret" type="text" class="secret grow" placeholder="Contraseña (mín. 8)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
-      </div>
-      <div class="row wrap" style="margin-top:8px"><button class="btn" id="nu-gen">Generar contraseña</button><button class="btn primary grow" id="nu-create" ${h.ready ? '' : 'disabled'}>Crear usuario</button></div>`;
+      <details class="nu-box" id="nu-box"><summary>+ Nuevo usuario</summary>
+        <div class="stack" style="margin-top:10px">
+          <input id="nu-name" type="text" placeholder="Usuario (minúsculas y números)" maxlength="20" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
+          <input id="nu-pass" name="new-user-secret" type="text" class="secret" placeholder="Contraseña (mín. 8)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
+          <div class="row wrap"><button class="btn" id="nu-gen" type="button">Generar</button><button class="btn primary grow" id="nu-create" type="button" ${h.ready ? '' : 'disabled'}>Crear usuario</button></div>
+        </div>
+      </details>`;
   };
 
-  const tabs = [['conn', 'Conexiones'], ['ia', 'IA'], ...(canAdmin ? [['users', 'Usuarios'], ['red', 'Red']] : []), ['sys', canAdmin ? 'Sistema' : 'Cuenta']];
+  const tabs = [['conn', 'Conexiones', I.tconn], ['ia', 'IA y OpenCode', I.tia], ...(canAdmin ? [['users', 'Usuarios', I.tusers], ['red', 'Red', I.tred]] : []), ['sys', canAdmin ? 'Sistema' : 'Cuenta', I.gear]];
   const secTab = { update: 'sys', egress: 'red', users: 'users' };
   let curTab = secTab[section] || store.get('settingsTab');
   if (!tabs.some(([k]) => k === curTab)) curTab = 'conn';
   m.body.innerHTML = `
-    <div class="tabbar" role="tablist" aria-label="Secciones de ajustes">${tabs.map(([k, l]) => `<button type="button" role="tab" class="tabbtn${k === curTab ? ' on' : ''}" data-tab="${k}" aria-selected="${k === curTab}">${l}</button>`).join('')}</div>
+    <div class="tabbar" role="tablist" aria-label="Secciones de ajustes">${tabs.map(([k, l, ic]) => `<button type="button" role="tab" class="tabbtn${k === curTab ? ' on' : ''}" data-tab="${k}" aria-selected="${k === curTab}" aria-label="${l}" title="${l}">${ico(ic, 'width="21" height="21"')}<span class="tl">${l}</span></button>`).join('')}<button type="button" class="tabtoggle" aria-label="Mostrar nombres de las secciones" title="Mostrar nombres">${ico(I.chev, 'width="18" height="18"')}</button></div>
     <div class="tabpane" data-pane="conn"${curTab === 'conn' ? '' : ' hidden'}>
     <h3 style="margin-top:0">GitHub</h3>
     <div id="gh-block">
@@ -1718,6 +1733,33 @@ async function settingsModal(section) {
       try { await busyBtn(e.target, 'Eliminando…', () => api('DELETE', `/api/users/${encodeURIComponent(name)}`, { purge: $('#del-purge', dm.el).checked })); toast('Usuario eliminado'); dm.close(); usersRefresh(); } catch (err) { toast(err.message, 'err'); }
     });
   };
+  const userAct = async (name, act, u) => {
+    try {
+      if (act === 'pass') passModal(name);
+      else if (act === 'del') delModal(name);
+      else if (act === 'restart') {
+        const fresh = (await api('GET', '/api/users').catch(() => null))?.users?.find((x) => x.name === name);
+        const msg = fresh?.activity === 'busy' ? `${name} tiene ${fresh.busy || 'tareas'} conversación(es) trabajando ahora mismo. Si reinicias su espacio, se interrumpen y no se reanudan solas. ¿Reiniciar de todos modos?`
+          : fresh?.activity === 'idle' ? `${name} no tiene tareas en curso. ¿Reiniciar su espacio?`
+            : `No he podido comprobar si ${name} está trabajando. ¿Reiniciar su espacio de todos modos?`;
+        if (!confirm(msg)) return;
+        await api('POST', `/api/users/${encodeURIComponent(name)}/restart`); toast('Espacio reiniciado'); usersRefresh();
+      } else if (act === 'toggle') {
+        const disable = !u?.disabled;
+        if (disable && !confirm(`Se cerrará la sesión de ${name} y se detendrá su espacio (sus datos se conservan). ¿Continuar?`)) return;
+        await api('PUT', `/api/users/${encodeURIComponent(name)}/disabled`, { disabled: disable }); usersRefresh();
+      }
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  const userMenu = (name) => {
+    const u = usersData?.users?.find((x) => x.name === name);
+    const mm = openModal(name, `<div class="stack">
+      <button class="btn" data-ma="pass">Cambiar contraseña</button>
+      ${u?.disabled ? '' : '<button class="btn" data-ma="restart">Reiniciar espacio</button>'}
+      <button class="btn" data-ma="toggle">${u?.disabled ? 'Activar usuario' : 'Desactivar usuario'}</button>
+      <button class="btn danger" data-ma="del">Eliminar usuario…</button></div>`);
+    mm.el.querySelectorAll('[data-ma]').forEach((b) => b.addEventListener('click', () => { mm.close(); userAct(name, b.dataset.ma, u); }));
+  };
   const usersBind = () => {
     q('#nu-gen')?.addEventListener('click', () => { q('#nu-pass').value = genPass(); });
     click('#users-refresh', async (b) => { await busyBtn(b, 'Comprobando…', usersRefresh); });
@@ -1727,24 +1769,7 @@ async function settingsModal(section) {
       toast(`Usuario ${name} creado`); q('#nu-name').value = ''; q('#nu-pass').value = '';
       await usersRefresh();
     });
-    m.el.querySelectorAll('[data-u-act]').forEach((btn) => btn.addEventListener('click', async () => {
-      const name = btn.dataset.u; const act = btn.dataset.uAct;
-      try {
-        if (act === 'pass') passModal(name);
-        else if (act === 'del') delModal(name);
-        else if (act === 'restart') {
-          const fresh = (await api('GET', '/api/users').catch(() => null))?.users?.find((x) => x.name === name);
-          const msg = fresh?.activity === 'busy' ? `${name} tiene ${fresh.busy || 'tareas'} conversación(es) trabajando ahora mismo. Si reinicias su espacio, se interrumpen y no se reanudan solas. ¿Reiniciar de todos modos?`
-            : fresh?.activity === 'idle' ? `${name} no tiene tareas en curso. ¿Reiniciar su espacio?`
-              : `No he podido comprobar si ${name} está trabajando. ¿Reiniciar su espacio de todos modos?`;
-          if (!confirm(msg)) return; await busyBtn(btn, 'Reiniciando…', () => api('POST', `/api/users/${encodeURIComponent(name)}/restart`)); toast('Espacio reiniciado'); usersRefresh(); }
-        else if (act === 'toggle') {
-          const disable = btn.dataset.disabled !== '1';
-          if (disable && !confirm(`Se cerrará la sesión de ${name} y se detendrá su espacio (sus datos se conservan). ¿Continuar?`)) return;
-          await busyBtn(btn, '…', () => api('PUT', `/api/users/${encodeURIComponent(name)}/disabled`, { disabled: disable })); usersRefresh();
-        }
-      } catch (err) { toast(err.message, 'err'); }
-    }));
+    m.el.querySelectorAll('[data-u-menu]').forEach((btn) => btn.addEventListener('click', () => userMenu(btn.dataset.uMenu)));
   };
   usersBind();
 
@@ -1791,7 +1816,11 @@ async function settingsModal(section) {
     m.el.querySelector('.tabbtn.on')?.scrollIntoView({ inline: 'center', block: 'nearest' });
   };
   setTimeout(() => m.el.querySelector('.tabbtn.on')?.scrollIntoView({ inline: 'center', block: 'nearest' }), 0);
-  m.el.querySelector('.tabbar')?.addEventListener('click', (e) => { const b = e.target.closest('.tabbtn'); if (b) showTab(b.dataset.tab); });
+  m.el.querySelector('.tabbar')?.addEventListener('click', (e) => {
+    const bar = e.currentTarget;
+    if (e.target.closest('.tabtoggle')) { bar.classList.toggle('open'); return; }
+    const b = e.target.closest('.tabbtn'); if (b) { showTab(b.dataset.tab); bar.classList.remove('open'); }
+  });
   if (['update', 'egress', 'users'].includes(section)) setTimeout(() => q(`#sec-${section}`)?.scrollIntoView({ behavior: 'smooth' }), 50);
 }
 
