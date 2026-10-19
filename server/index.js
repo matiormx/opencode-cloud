@@ -511,9 +511,23 @@ router.get(
 );
 router.post('/projects/:id/sessions', ocRoute((dir, req) => oc.json('POST', '/session', { directory: dir, body: { title: req.body?.title || undefined } })));
 router.get('/projects/:id/sessions/:sid/messages', ocRoute(async (dir, req) => {
-  const r = await oc.json('GET', `/session/${sid(req)}/message`, { directory: dir, query: { limit: 300 } });
+  const [r, ses] = await Promise.all([
+    oc.json('GET', `/session/${sid(req)}/message`, { directory: dir, query: { limit: 300 } }),
+    oc.json('GET', `/session/${sid(req)}`, { directory: dir }).catch(() => null),
+  ]);
   if (!Array.isArray(r)) throw fail('OpenCode no devolvió la conversación (¿se está reiniciando?). Reintenta en unos segundos.', 502);
-  return r;
+  // Tras «deshacer» (revert), OpenCode conserva los mensajes revertidos hasta el siguiente envío: no se muestran
+  const cut = ses?.revert?.messageID;
+  return typeof cut === 'string' && cut ? r.filter((m) => String(m.info?.id || '') < cut) : r;
+}));
+// Retira una consulta (y lo que vino después) de la conversación y deshace los cambios de archivos que hizo esa tarea
+router.post('/projects/:id/sessions/:sid/rewind', wrap(async (req, res) => {
+  const p = getProject(req);
+  const messageID = String(req.body?.messageID || '');
+  if (!/^msg_[A-Za-z0-9]{6,40}$/.test(messageID)) throw fail('Mensaje no válido');
+  queue.pauseIfAny(p.id, sid(req));
+  await oc.json('POST', `/session/${sid(req)}/abort`, { directory: p.path }).catch(() => null); // por si sigue trabajando
+  res.json(await oc.json('POST', `/session/${sid(req)}/revert`, { directory: p.path, body: { messageID } }));
 }));
 router.get('/projects/:id/sessions/:sid/diff', ocRoute((dir, req) => oc.json('GET', `/session/${sid(req)}/diff`, { directory: dir })));
 router.patch(

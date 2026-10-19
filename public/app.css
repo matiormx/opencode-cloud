@@ -472,3 +472,5 @@ code, .banner, .hint, .muted { -webkit-user-select: text; user-select: text; }
 .dot.ok { background: var(--ok); } .dot.busy { background: var(--warn); } .dot.warn { background: var(--warn); opacity: .55; } .dot.off { background: var(--muted); opacity: .5; }
 .nu-box { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
 .nu-box summary { cursor: pointer; font-weight: 600; }
+
+.msg-actions { align-self: flex-end; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; font-size: 13px; margin: -4px 0 6px; }

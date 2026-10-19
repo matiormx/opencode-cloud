@@ -928,7 +928,14 @@ function renderMessages(forceScroll = false) {
     inner.innerHTML = `<div class="empty"><div class="logo" style="margin:0 auto">${ico(I.code, 'stroke="#fff" stroke-width="2.4"')}</div><h1>Bienvenido</h1><p class="muted">Crea un proyecto o clona uno desde GitHub para empezar a trabajar con OpenCode.</p><p><button class="btn primary" data-act="new-project">Nuevo proyecto</button></p></div>`;
     return;
   }
-  const html = state.messages.map(renderMessage).join('');
+  // Tras detener una tarea: acciones sobre la última consulta (editarla o retirarla)
+  let lastUser = -1;
+  state.messages.forEach((mm, i) => { if (mm.info?.role === 'user') lastUser = i; });
+  const after = lastUser >= 0 ? state.messages.slice(lastUser + 1).filter((mm) => mm.info?.role === 'assistant') : [];
+  const stopped = lastUser >= 0 && !state.busy && state.messages[lastUser].info?.id !== 'tmp'
+    && (!after.length || after.some((mm) => mm.info?.error?.name === 'MessageAbortedError'));
+  const html = state.messages.map((mm, i) => renderMessage(mm) + (i === lastUser && stopped
+    ? `<div class="msg-actions" data-mid="${esc(mm.info.id)}"><span class="muted">Tarea detenida</span><button type="button" class="btn small" data-rw="edit">Editar consulta</button><button type="button" class="btn small danger" data-rw="del">Eliminar</button></div>` : '')).join('');
   inner.innerHTML = (html || `<div class="empty"><h1>${esc(state.project.name)}</h1><p class="muted">Escribe tu primera petición abajo. OpenCode trabajará dentro de este proyecto.</p></div>`)
     + '<div id="typing"></div><div id="perms"></div>';
   $$('details', inner).forEach((d) => { if (open.has(d.dataset.key)) d.open = true; });
@@ -1968,6 +1975,22 @@ function bindShell() {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submitInput(); }
   });
   $('#send').addEventListener('click', submitInput);
+  $('#chat-inner').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-rw]'); if (!b) return;
+    const mid = b.closest('.msg-actions')?.dataset.mid; if (!mid || !state.project || !state.sessionId) return;
+    const um = state.messages.find((x) => x.info?.id === mid);
+    const text = (um?.parts || []).filter((p) => p.type === 'text' && !p.synthetic).map((p) => p.text).join('\n').trim();
+    const edit = b.dataset.rw === 'edit';
+    if (!edit && !confirm('Se retirará esta consulta de la conversación y se deshará lo que OpenCode llegó a modificar en los archivos con ella. ¿Continuar?')) return;
+    if (edit && !confirm('Se retirará esta consulta y se deshará lo que OpenCode llegó a modificar con ella; el texto pasará al cuadro de mensaje para que lo edites. ¿Continuar?')) return;
+    try {
+      await busyBtn(b, 'Deshaciendo…', () => api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/rewind`, { messageID: mid }));
+      state.messages = state.messages.filter((x) => String(x.info?.id || '') < mid);
+      renderMessages(true);
+      if (edit) { const inp = $('#input'); inp.value = text; autosize(inp); updateSendButton(); inp.focus(); }
+      refreshMessages();
+    } catch (err) { toast(err.message, 'err'); }
+  });
   $('#attach-btn').addEventListener('click', () => $('#attach-file').click());
   $('#attach-file').addEventListener('change', async (e) => { const f = [...e.target.files]; e.target.value = ''; await addImages(f); });
   $('#attach-row').addEventListener('click', (e) => { const b = e.target.closest('.thumb-x'); if (b) { state.attach.splice(Number(b.dataset.i), 1); renderAttach(); } });
