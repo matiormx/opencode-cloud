@@ -1514,7 +1514,7 @@ async function settingsModal(section) {
     <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button>${canAdmin ? '<button class="btn" id="oc-upgrade">Actualizar OpenCode</button>' : ''}<button class="btn ghost" id="oc-logs">Ver registro</button></div>
     <div id="oc-logbox"></div>
 
-    ${usersData || settings.canManageUsers ? `<h3 id="sec-users">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : ''}
+    ${usersData || settings.canManageUsers ? `<h3 id="sec-users">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : (canAdmin ? `<h3 id="sec-users">Usuarios</h3><div class="hint">El modo multiusuario no está activado. Para poder crear usuarios con su propio espacio, ejecuta una vez por SSH en el VPS:<br><code>sudo /opt/opencode-cloud/deploy/multiuser.sh setup</code><br>y vuelve a abrir los ajustes. (Requiere haber actualizado antes a la v0.8.0 o superior.)</div>` : '')}
 
     ${canAdmin ? `<h3 id="sec-egress">Salida a internet (WireGuard)</h3>
     <div id="eg-block">${egressBlock()}</div>
