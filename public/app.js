@@ -1553,7 +1553,7 @@ async function settingsModal(section) {
     const rows = d.users.map((u) => {
       const chip = u.role === 'admin' ? '<span class="chip">administrador</span>'
         : u.disabled ? '<span class="chip warn">desactivado</span>'
-          : (u.running ? `<span class="chip" style="color:var(--ok)">en marcha</span>${u.busy ? ` <span class="chip warn">trabajando (${u.busy})</span>` : ''}${u.queued ? ` <span class="chip">${u.queued} en cola</span>` : ''}${!u.busy && u.lastSeen ? ` <span class="muted">${seenAgo(u.lastSeen)}</span>` : ''}` : '<span class="chip warn">sin responder</span>');
+          : (u.running ? `<span class="chip" style="color:var(--ok)">espacio activo</span> ${u.activity === 'busy' ? `<span class="chip warn">trabajando${u.busy ? ` (${u.busy})` : ''}</span>${u.queued ? ` <span class="chip">${u.queued} en cola</span>` : ''}` : u.activity === 'idle' ? '<span class="chip">sin tareas en curso</span>' : '<span class="chip warn">actividad desconocida</span>'}${u.activity !== 'busy' ? ` <span class="muted">${u.lastSeen ? seenAgo(u.lastSeen) : 'sin conexión desde el último reinicio'}</span>` : ''}` : '<span class="chip warn">sin responder</span>');
       const btns = u.role === 'admin' ? '' : `<div class="row wrap" style="margin-top:6px">
         <button class="btn small" data-u-act="pass" data-u="${esc(u.name)}">Contraseña</button>
         ${u.disabled ? '' : `<button class="btn small" data-u-act="restart" data-u="${esc(u.name)}">Reiniciar espacio</button>`}
@@ -1563,6 +1563,7 @@ async function settingsModal(section) {
     }).join('');
     return `
       <p class="muted" style="margin-top:0">Cada usuario tiene su propio espacio aislado: su usuario de Linux, su OpenCode, sus proyectos, sus claves de API y su token de GitHub. Solo tú puedes crear usuarios.</p>
+      <div class="row wrap" style="margin-bottom:8px"><button class="btn small" id="users-refresh" type="button">Actualizar actividad</button><span class="muted" style="font-size:12.5px">«Sin tareas en curso» significa que acabo de comprobarlo y OpenCode no está ejecutando nada.</span></div>
       ${warn}
       <div id="user-list" style="margin-bottom:12px">${rows}</div>
       <div class="row wrap">
@@ -1704,6 +1705,7 @@ async function settingsModal(section) {
   };
   const usersBind = () => {
     q('#nu-gen')?.addEventListener('click', () => { q('#nu-pass').value = genPass(); });
+    click('#users-refresh', async (b) => { await busyBtn(b, 'Comprobando…', usersRefresh); });
     click('#nu-create', async (b) => {
       const name = q('#nu-name').value.trim().toLowerCase(); const password = q('#nu-pass').value;
       await busyBtn(b, 'Creando… (unos segundos)', () => api('POST', '/api/users', { name, password }));
@@ -1715,7 +1717,12 @@ async function settingsModal(section) {
       try {
         if (act === 'pass') passModal(name);
         else if (act === 'del') delModal(name);
-        else if (act === 'restart') { if (!confirm(`Se reiniciará el espacio de ${name}; si está trabajando, se interrumpe. ¿Continuar?`)) return; await busyBtn(btn, 'Reiniciando…', () => api('POST', `/api/users/${encodeURIComponent(name)}/restart`)); toast('Espacio reiniciado'); usersRefresh(); }
+        else if (act === 'restart') {
+          const fresh = (await api('GET', '/api/users').catch(() => null))?.users?.find((x) => x.name === name);
+          const msg = fresh?.activity === 'busy' ? `${name} tiene ${fresh.busy || 'tareas'} conversación(es) trabajando ahora mismo. Si reinicias su espacio, se interrumpen y no se reanudan solas. ¿Reiniciar de todos modos?`
+            : fresh?.activity === 'idle' ? `${name} no tiene tareas en curso. ¿Reiniciar su espacio?`
+              : `No he podido comprobar si ${name} está trabajando. ¿Reiniciar su espacio de todos modos?`;
+          if (!confirm(msg)) return; await busyBtn(btn, 'Reiniciando…', () => api('POST', `/api/users/${encodeURIComponent(name)}/restart`)); toast('Espacio reiniciado'); usersRefresh(); }
         else if (act === 'toggle') {
           const disable = btn.dataset.disabled !== '1';
           if (disable && !confirm(`Se cerrará la sesión de ${name} y se detendrá su espacio (sus datos se conservan). ¿Continuar?`)) return;

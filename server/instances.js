@@ -110,7 +110,7 @@ export async function activity(name) {
     v = await new Promise((resolve) => {
       const rq = http.request({ host: '127.0.0.1', port: k.port, path: '/api/activity', method: 'GET', timeout: 2500, headers: { 'x-oc-gateway': k.secret, 'x-oc-user': name } }, (r) => {
         let b = ''; r.setEncoding('utf8'); r.on('data', (d) => { if (b.length < 200000) b += d; });
-        r.on('end', () => { try { const j = JSON.parse(b); resolve({ busy: (j.busy || []).length, queued: Number(j.queued) || 0, projects: [...new Set((j.busy || []).map((x) => x.projectName))].slice(0, 5) }); } catch { resolve(null); } });
+        r.on('end', () => { try { const j = JSON.parse(b); if (r.statusCode !== 200 || !Array.isArray(j.busy)) return resolve(null); resolve({ busy: (j.busy || []).length, queued: Number(j.queued) || 0, projects: [...new Set((j.busy || []).map((x) => x.projectName))].slice(0, 5) }); } catch { resolve(null); } });
       });
       rq.on('timeout', () => rq.destroy()); rq.on('error', () => resolve(null)); rq.end();
     });

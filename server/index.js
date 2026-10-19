@@ -266,7 +266,11 @@ router.get(
       u.running = u.role === 'admin' ? true : !u.disabled && (await instances.probe(u.name));
       if (u.role === 'admin') return;
       u.lastSeen = gateway.lastSeen(u.name) || 0;
-      if (u.running) { const a = await instances.activity(u.name); if (a) { u.busy = a.busy; u.queued = a.queued; } }
+      if (u.running) {
+        const a = await instances.activity(u.name);
+        // 'unknown' = no se pudo comprobar (no se da por inactivo); 'idle' = comprobado y sin nada en marcha
+        if (a) { u.busy = a.busy; u.queued = a.queued; u.activity = a.busy || a.queued ? 'busy' : 'idle'; } else u.activity = 'unknown';
+      }
     }));
     res.json({ users: list, helper: instances.helperInfo() });
   }),
