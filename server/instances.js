@@ -97,3 +97,24 @@ export function nudge(name) {
   nudged.set(name, Date.now());
   request('start', name).catch(() => {});
 }
+
+// Trabajo en curso en el espacio de un usuario (conversaciones de OpenCode trabajando y mensajes en cola).
+// Se pregunta a su propia instancia; caché corta para no saturar cuando la WebUI consulta a menudo.
+const actCache = new Map();
+export async function activity(name) {
+  const c = actCache.get(name);
+  if (c && Date.now() - c.at < 8000) return c.v;
+  const k = keys(name);
+  let v = null;
+  if (k) {
+    v = await new Promise((resolve) => {
+      const rq = http.request({ host: '127.0.0.1', port: k.port, path: '/api/activity', method: 'GET', timeout: 2500, headers: { 'x-oc-gateway': k.secret, 'x-oc-user': name } }, (r) => {
+        let b = ''; r.setEncoding('utf8'); r.on('data', (d) => { if (b.length < 200000) b += d; });
+        r.on('end', () => { try { const j = JSON.parse(b); resolve({ busy: (j.busy || []).length, queued: Number(j.queued) || 0, projects: [...new Set((j.busy || []).map((x) => x.projectName))].slice(0, 5) }); } catch { resolve(null); } });
+      });
+      rq.on('timeout', () => rq.destroy()); rq.on('error', () => resolve(null)); rq.end();
+    });
+  }
+  actCache.set(name, { at: Date.now(), v });
+  return v;
+}

@@ -10,6 +10,9 @@ import * as users from './users.js';
 const LOCAL = new Set(['/health', '/me', '/login', '/logout', '/password']);
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length']);
 
+const seen = new Map();
+export const lastSeen = (name) => seen.get(name) || 0;
+
 export function proxy(req, res, next) {
   if (!config.multiuser) return next();
   const info = auth.sessionInfo(req);
@@ -22,6 +25,7 @@ export function proxy(req, res, next) {
   if (LOCAL.has(req.path)) return next();
   if (req.path.startsWith('/users')) return res.status(403).json({ error: 'Solo el administrador puede gestionar usuarios' });
 
+  seen.set(name, Date.now());
   const k = instances.keys(name);
   if (!k) return res.status(503).json({ error: 'Tu espacio todavía no está preparado. Pide al administrador que lo revise.' });
 

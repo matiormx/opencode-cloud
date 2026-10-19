@@ -143,11 +143,18 @@ router.get(
         } catch { /* OpenCode no responde: no hay nada que interrumpir */ }
       }),
     );
+    // En modo multiusuario, el administrador también ve si los espacios de los demás están trabajando
+    let others = [];
+    if (config.multiuser && req.sessionUser === '') {
+      const rows = await Promise.all(users.list().filter((u) => u.role !== 'admin' && !u.disabled).map(async (u) => ({ name: u.name, ...((await instances.activity(u.name)) || {}) })));
+      others = rows.filter((r) => r.busy || r.queued);
+    }
     res.json({
       busy: sessions.map(({ projectId, projectName, sessionId }) => ({ projectId, projectName, sessionId })),
       sessions,
       queued: queue.countAll(),
       requests: reqmon.snapshot(),
+      others,
     });
   }),
 );
@@ -255,7 +262,12 @@ router.get(
   adminOnly,
   wrap(async (req, res) => {
     const list = users.list();
-    await Promise.all(list.map(async (u) => { u.running = u.role === 'admin' ? true : !u.disabled && (await instances.probe(u.name)); }));
+    await Promise.all(list.map(async (u) => {
+      u.running = u.role === 'admin' ? true : !u.disabled && (await instances.probe(u.name));
+      if (u.role === 'admin') return;
+      u.lastSeen = gateway.lastSeen(u.name) || 0;
+      if (u.running) { const a = await instances.activity(u.name); if (a) { u.busy = a.busy; u.queued = a.queued; } }
+    }));
     res.json({ users: list, helper: instances.helperInfo() });
   }),
 );

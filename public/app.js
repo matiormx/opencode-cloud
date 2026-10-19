@@ -554,10 +554,21 @@ function sysModal() {
 }
 
 // Antes de reiniciar o actualizar: avisa si OpenCode está trabajando (se interrumpiría esa tarea)
+function seenAgo(t) {
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 2 ? 'activo ahora' : m < 60 ? `visto hace ${m} min` : m < 1440 ? `visto hace ${Math.round(m / 60)} h` : `visto hace ${Math.round(m / 1440)} d`;
+}
+
 async function confirmInterrupt(question) {
   let busy = [];
   let queued = 0;
-  try { ({ busy, queued } = await api('GET', '/api/activity')); } catch { /* sin datos: se pregunta lo normal */ }
+  let others = [];
+  try { ({ busy, queued, others = [] } = await api('GET', '/api/activity')); } catch { /* sin datos: se pregunta lo normal */ }
+  if (others.some((o) => o.busy)) {
+    const who = others.filter((o) => o.busy).map((o) => `${o.name} (${o.busy})`).join(', ');
+    const mine = busy.length ? `Tú también tienes ${busy.length} conversación${busy.length > 1 ? 'es' : ''} trabajando.\n\n` : '';
+    return confirm(`Hay usuarios con OpenCode trabajando ahora mismo: ${who}.\n\n${mine}Si continúas, esas tareas se interrumpirán y no se reanudan solas.\n\n¿Continuar de todos modos?`);
+  }
   if (!busy.length) return confirm(question);
   const names = [...new Set(busy.map((b) => b.projectName))].join(', ');
   return confirm(`OpenCode está trabajando ahora mismo (${busy.length} conversación${busy.length > 1 ? 'es' : ''}: ${names}).\n\nSi continúas, esa tarea se interrumpirá y no se reanuda sola${queued ? ' (los mensajes en cola sí se enviarán después)' : ''}.\n\n¿Continuar de todos modos?`);
@@ -1457,7 +1468,7 @@ async function settingsModal(section) {
     const rows = d.users.map((u) => {
       const chip = u.role === 'admin' ? '<span class="chip">administrador</span>'
         : u.disabled ? '<span class="chip warn">desactivado</span>'
-          : (u.running ? '<span class="chip" style="color:var(--ok)">en marcha</span>' : '<span class="chip warn">sin responder</span>');
+          : (u.running ? `<span class="chip" style="color:var(--ok)">en marcha</span>${u.busy ? ` <span class="chip warn">trabajando (${u.busy})</span>` : ''}${u.queued ? ` <span class="chip">${u.queued} en cola</span>` : ''}${!u.busy && u.lastSeen ? ` <span class="muted">${seenAgo(u.lastSeen)}</span>` : ''}` : '<span class="chip warn">sin responder</span>');
       const btns = u.role === 'admin' ? '' : `<div class="row wrap" style="margin-top:6px">
         <button class="btn small" data-u-act="pass" data-u="${esc(u.name)}">Contraseña</button>
         ${u.disabled ? '' : `<button class="btn small" data-u-act="restart" data-u="${esc(u.name)}">Reiniciar espacio</button>`}
