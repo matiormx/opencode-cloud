@@ -1573,7 +1573,13 @@ async function settingsModal(section) {
       <div class="row wrap" style="margin-top:8px"><button class="btn" id="nu-gen">Generar contraseña</button><button class="btn primary grow" id="nu-create" ${h.ready ? '' : 'disabled'}>Crear usuario</button></div>`;
   };
 
+  const tabs = [['conn', 'Conexiones'], ['ia', 'IA'], ...(canAdmin ? [['users', 'Usuarios'], ['red', 'Red']] : []), ['sys', canAdmin ? 'Sistema' : 'Cuenta']];
+  const secTab = { update: 'sys', egress: 'red', users: 'users' };
+  let curTab = secTab[section] || store.get('settingsTab');
+  if (!tabs.some(([k]) => k === curTab)) curTab = 'conn';
   m.body.innerHTML = `
+    <div class="tabbar" role="tablist" aria-label="Secciones de ajustes">${tabs.map(([k, l]) => `<button type="button" role="tab" class="tabbtn${k === curTab ? ' on' : ''}" data-tab="${k}" aria-selected="${k === curTab}">${l}</button>`).join('')}</div>
+    <div class="tabpane" data-pane="conn"${curTab === 'conn' ? '' : ' hidden'}>
     <h3 style="margin-top:0">GitHub</h3>
     <div id="gh-block">
       ${gh.connected ? `<p style="margin-top:0">Conectado como <strong>${esc(gh.login)}</strong>.</p><div class="row wrap"><button class="btn small danger" id="gh-remove">Desconectar</button><a class="btn small" href="${GH_TOKENS_PAGE}" target="_blank" rel="noopener noreferrer">Gestionar mis tokens en GitHub</a></div>`
@@ -1589,7 +1595,9 @@ async function settingsModal(section) {
     <h3>Identidad de Git</h3>
     <div class="row wrap"><input id="g-name" type="text" class="grow" value="${esc(settings.gitName)}" placeholder="Nombre"><input id="g-email" type="email" class="grow" value="${esc(settings.gitEmail)}" placeholder="correo"><button class="btn" id="g-save">Guardar</button></div>
 
-    <h3>Proveedores de IA</h3>
+    </div>
+    <div class="tabpane" data-pane="ia"${curTab === 'ia' ? '' : ' hidden'}>
+    <h3 style="margin-top:0">Proveedores de IA</h3>
     <p class="muted" style="margin-top:0">Añade una API key para que aparezcan sus modelos en el selector. Con «Visible» desactivado, un proveedor sigue conectado pero sus modelos no salen en la lista.</p>
     ${(() => {
       const stored = new Map((models?.stored || []).map((x) => [x.id, x]));
@@ -1610,20 +1618,27 @@ async function settingsModal(section) {
     <p style="margin-top:0">Estado: ${oc.healthy ? '<span style="color:var(--ok)">en marcha</span>' : '<span style="color:var(--err)">no responde</span>'}${oc.version ? ` · versión ${esc(oc.version)}` : ''}</p>
     <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button>${canAdmin ? '<button class="btn" id="oc-upgrade">Actualizar OpenCode</button>' : ''}<button class="btn ghost" id="oc-logs">Ver registro</button></div>
     <div id="oc-logbox"></div>
+    </div>
 
-    ${usersData || settings.canManageUsers ? `<h3 id="sec-users">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : (canAdmin ? `<h3 id="sec-users">Usuarios</h3><div class="hint">El modo multiusuario no está activado. Para poder crear usuarios con su propio espacio, ejecuta una vez por SSH en el VPS:${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}y vuelve a abrir los ajustes. (Requiere haber actualizado antes a la v0.8.0 o superior.)</div>` : '')}
+    ${canAdmin ? `<div class="tabpane" data-pane="users"${curTab === 'users' ? '' : ' hidden'}>` : ''}
+    ${usersData || settings.canManageUsers ? `<h3 id="sec-users" style="margin-top:0">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : (canAdmin ? `<h3 id="sec-users">Usuarios</h3><div class="hint">El modo multiusuario no está activado. Para poder crear usuarios con su propio espacio, ejecuta una vez por SSH en el VPS:${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}y vuelve a abrir los ajustes. (Requiere haber actualizado antes a la v0.8.0 o superior.)</div>` : '')}
 
-    ${canAdmin ? `<h3 id="sec-egress">Salida a internet (WireGuard)</h3>
+    ${canAdmin ? `</div>
+    <div class="tabpane" data-pane="red"${curTab === 'red' ? '' : ' hidden'}>
+    <h3 id="sec-egress" style="margin-top:0">Salida a internet (WireGuard)</h3>
     <div id="eg-block">${egressBlock()}</div>
+    </div>` : ''}
 
-    <h3 id="sec-update">Actualizaciones de esta aplicación</h3>
+    <div class="tabpane" data-pane="sys"${curTab === 'sys' ? '' : ' hidden'}>
+    ${canAdmin ? `<h3 id="sec-update" style="margin-top:0">Actualizaciones de esta aplicación</h3>
     <div id="upd-block">${updateBlock()}</div>` : ''}
 
-    <h3>Aplicación</h3>
+    <h3${canAdmin ? '' : ' style="margin-top:0"'}>Aplicación</h3>
     <div id="app-block">${appBlock()}</div>
 
     <h3>Seguridad</h3>
-    <div class="row wrap"><input id="pw-cur" type="password" class="grow" placeholder="Contraseña actual" autocomplete="current-password"><input id="pw-new" type="password" class="grow" placeholder="Nueva (mín. 8)" autocomplete="new-password"><button class="btn" id="pw-save">Cambiar</button></div>`;
+    <div class="row wrap"><input id="pw-cur" type="password" class="grow" placeholder="Contraseña actual" autocomplete="current-password"><input id="pw-new" type="password" class="grow" placeholder="Nueva (mín. 8)" autocomplete="new-password"><button class="btn" id="pw-save">Cambiar</button></div>
+    </div>`;
 
   const q = (s) => $(s, m.el);
   const click = (sel, fn) => q(sel)?.addEventListener('click', async (e) => { try { await fn(e.target); } catch (err) { toast(err.message, 'err'); } });
@@ -1768,6 +1783,15 @@ async function settingsModal(section) {
   click('#app-install', async () => { await installApp(); $('#app-block', m.el).innerHTML = appBlock(); });
   click('#pw-save', async (b) => { await busyBtn(b, 'Guardando…', () => api('PUT', '/api/password', { current: q('#pw-cur').value, next: q('#pw-new').value })); toast('Contraseña cambiada'); q('#pw-cur').value = ''; q('#pw-new').value = ''; });
 
+  const showTab = (k) => {
+    for (const b of m.el.querySelectorAll('.tabbtn')) { const on = b.dataset.tab === k; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }
+    for (const pn of m.el.querySelectorAll('.tabpane')) pn.hidden = pn.dataset.pane !== k;
+    store.set('settingsTab', k);
+    $('.modal-body', m.el).scrollTop = 0;
+    m.el.querySelector('.tabbtn.on')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  };
+  setTimeout(() => m.el.querySelector('.tabbtn.on')?.scrollIntoView({ inline: 'center', block: 'nearest' }), 0);
+  m.el.querySelector('.tabbar')?.addEventListener('click', (e) => { const b = e.target.closest('.tabbtn'); if (b) showTab(b.dataset.tab); });
   if (['update', 'egress', 'users'].includes(section)) setTimeout(() => q(`#sec-${section}`)?.scrollIntoView({ behavior: 'smooth' }), 50);
 }
 
