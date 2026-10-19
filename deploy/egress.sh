@@ -25,7 +25,7 @@ APP_USER="${APP_USER:-occloud}"
 IFACE="${IFACE:-ocegress}"
 MTU="${MTU:-1380}"
 SERVICE=opencode-cloud
-HELPER_VERSION=2
+HELPER_VERSION=3
 ENV_FILE="${ENV_FILE:-/etc/$SERVICE.env}"
 TABLE=51820
 USER_UIDS="${USER_UIDS:-61000-61999}"   # uids de los usuarios del modo multiusuario
@@ -216,6 +216,7 @@ do_install() {
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN; chmod 600 "$tmp"
   if [ "$src" = "-" ]; then cat > "$tmp"; else cat "$src" > "$tmp"; fi
   ensure_wg
+  subst_saved "$tmp" || return 1
   # Primero se valida y se escribe: si el fichero es inválido, el túnel que ya funcionaba no se toca
   build_conf "$tmp" "$uid" || return 1
   log "Configuración escrita en $CONF"
@@ -229,6 +230,36 @@ hs_age() {
   [ "$DRY" = 1 ] && { echo 5; return; }
   local t; t="$(wg show "$IFACE" latest-handshakes 2>/dev/null | awk '{print $2; exit}')"
   if [[ "${t:-0}" =~ ^[0-9]+$ ]] && [ "${t:-0}" -gt 0 ]; then echo $(( $(date +%s) - t )); else echo -1; fi
+}
+
+# Texto editable de la configuración guardada para la WebUI: solo campos permitidos y validados, con las claves
+# secretas sustituidas por "(guardada)". Al aplicarlo, esa marca conserva la clave que ya está en el VPS.
+conf_view() {
+  [ -f "$CONF" ] || return 0
+  local get out k v re_b64 re_ep re_ad re_ai re_n
+  re_b64='^[A-Za-z0-9+/]{43}=$'; re_ep='^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\]):[0-9]{1,5}$'; re_ad='^[0-9A-Fa-f:.,/ ]+$'; re_n='^[0-9]{1,5}$'
+  get() { sed -n "s/^$1 = //p" "$CONF" | head -n1; }
+  out="[Interface]\nPrivateKey = (guardada)\n"
+  v="$(get Address)"; [[ "$v" =~ $re_ad ]] && out="${out}Address = $v\n"
+  out="${out}\n[Peer]\n"
+  v="$(get PublicKey)"; [[ "$v" =~ $re_b64 ]] && out="${out}PublicKey = $v\n"
+  v="$(get PresharedKey)"; [ -n "$v" ] && out="${out}PresharedKey = (guardada)\n"
+  v="$(get Endpoint)"; [[ "$v" =~ $re_ep ]] && out="${out}Endpoint = $v\n"
+  v="$(get AllowedIPs)"; [[ "$v" =~ $re_ad ]] && out="${out}AllowedIPs = $v\n"
+  v="$(get PersistentKeepalive)"; [[ "$v" =~ $re_n ]] && out="${out}PersistentKeepalive = $v\n"
+  printf '%s' "$out"
+}
+
+# Sustituye "PrivateKey = (guardada)" / "PresharedKey = (guardada)" por la clave que ya está guardada en el VPS
+subst_saved() {
+  local f="$1" k v
+  for k in PrivateKey PresharedKey; do
+    if grep -qiE "^[[:space:]]*$k[[:space:]]*=[[:space:]]*\(guardada\)[[:space:]]*$" "$f"; then
+      v="$(sed -n "s/^$k = //p" "$CONF" 2>/dev/null | head -n1)"
+      if ! [[ "$v" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then echo "No hay $k guardada que conservar: pégala completa" >&2; return 1; fi
+      sed -i -E "s|^[[:space:]]*$k[[:space:]]*=[[:space:]]*\(guardada\)[[:space:]]*$|$k = $v|I" "$f"
+    fi
+  done
 }
 
 # Estado "vivo" para la WebUI (health.json). Solo texto validado; nunca la clave privada.
@@ -245,8 +276,8 @@ write_health() {
   [[ "$ep" =~ $re_ep ]] || ep=""; [[ "$ad" =~ $re_ad ]] || ad=""
   mkdir -p "$OUTBOX"
   tmp="$(mktemp "$OUTBOX/.h.XXXXXX")"
-  printf '{"v":%s,"configured":%s,"active":%s,"enabled":%s,"handshakeAge":%s,"endpoint":"%s","address":"%s","at":%s000}\n' \
-    "$HELPER_VERSION" "$configured" "$active" "$enabled" "$age" "$ep" "$ad" "$(date +%s)" > "$tmp"
+  printf '{"v":%s,"configured":%s,"active":%s,"enabled":%s,"handshakeAge":%s,"endpoint":"%s","address":"%s","view":"%s","at":%s000}\n' \
+    "$HELPER_VERSION" "$configured" "$active" "$enabled" "$age" "$ep" "$ad" "$(conf_view)" "$(date +%s)" > "$tmp"
   chmod 644 "$tmp"; mv -f "$tmp" "$OUTBOX/health.json"
 }
 

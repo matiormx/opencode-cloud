@@ -41,6 +41,21 @@ async function api(method, url, body) {
   return data;
 }
 
+// Comando para copiar: texto seleccionable más botón «Copiar» (en la PWA el texto normal no se puede seleccionar)
+const cmdBox = (text, style = '') => `<div class="cmd" style="${style}"><code>${esc(text)}</code><button type="button" class="btn small" data-copy>Copiar</button></div>`;
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch { /* sin permiso: alternativa */ }
+  try {
+    const ta = document.createElement('textarea'); ta.value = t; ta.style.cssText = 'position:fixed;opacity:0;top:0'; document.body.append(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  } catch { return false; }
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-copy]'); if (!b) return;
+  const ok = await copyText(b.parentElement.querySelector('code')?.textContent || '');
+  const old = b.textContent; b.textContent = ok ? 'Copiado' : 'No se pudo'; setTimeout(() => { b.textContent = old; }, 1500);
+});
+
 function toast(msg, kind = '') {
   // Un mismo aviso no se repite mientras sigue en pantalla (al volver de segundo plano se disparaban varios a la vez)
   if ([...document.querySelectorAll('#toasts .toast')].some((t) => t.textContent === msg)) return;
@@ -1488,7 +1503,7 @@ async function settingsModal(section) {
     if (!eg.helper) return `
       <p style="margin-top:0">Si el proveedor de modelos gratuitos bloquea la IP de tu VPS, puedes sacar <strong>solo el tráfico de OpenCode</strong> por tu servidor WireGuard de casa. Estado actual: salida directa desde el VPS${ipTxt(eg.ip)}.</p>
       <p style="margin-bottom:6px">Para gestionarlo desde aquí hay que instalar un pequeño ayudante en el VPS (una sola vez, por SSH):</p>
-      <pre class="code" style="margin-bottom:10px">sudo /opt/opencode-cloud/deploy/egress.sh setup</pre>
+      ${cmdBox('sudo /opt/opencode-cloud/deploy/egress.sh setup', 'margin-bottom:10px')}
       <button class="btn" id="eg-recheck">Ya lo he instalado, comprobar</button>`;
     const age = eg.handshakeAge;
     const stale = eg.active && age != null && (age < 0 || age > 300);
@@ -1501,16 +1516,16 @@ async function settingsModal(section) {
     const saved = eg.configured ? `<div class="banner" style="margin-bottom:10px">
         <strong>Configuración guardada en el VPS</strong>${eg.endpoint ? `<br>Servidor de casa: <code>${esc(eg.endpoint)}</code>` : ''}${eg.address ? `<br>Dirección del túnel: <code>${esc(eg.address)}</code>` : ''}
         <br><span class="muted">La clave privada está guardada y no se vuelve a mostrar por seguridad.${hs ? ` · ${hs}` : ''}</span></div>` : '';
-    const old = eg.helperV < 2 ? '<div class="banner" style="margin-bottom:10px">El ayudante está desactualizado: no vigila el túnel ni recupera la conexión si se cae. Ejecuta de nuevo <code>sudo /opt/opencode-cloud/deploy/egress.sh setup</code> (no pierdes tu configuración).</div>' : '';
-    const draft = egDraft ? esc(egDraft) : '';
+    const old = eg.helperV < 3 ? `<div class="banner" style="margin-bottom:10px">El ayudante está desactualizado: ${eg.helperV < 2 ? 'no vigila el túnel ni recupera la conexión si se cae, y ' : ''}no permite editar la configuración guardada. Ejecuta de nuevo este comando por SSH (no pierdes tu configuración):${cmdBox('sudo /opt/opencode-cloud/deploy/egress.sh setup', 'margin-top:8px')}</div>` : '';
+    const draft = esc(egDraft || eg.confView || '');
     const form = `
-      <label for="eg-conf" class="muted" style="font-size:13.5px;display:block;margin-bottom:6px">${eg.configured ? 'Sustituir la configuración' : 'Configuración del cliente WireGuard'} (el contenido del archivo <code>.conf</code>)</label>
+      <label for="eg-conf" class="muted" style="font-size:13.5px;display:block;margin-bottom:6px">${eg.configured ? 'Configuración guardada (editable)' : 'Configuración del cliente WireGuard'} — el contenido del archivo <code>.conf</code></label>
       <textarea id="eg-conf" rows="6" class="mono" style="font-size:13px" placeholder="[Interface]&#10;PrivateKey = …&#10;Address = 10.8.0.2/32&#10;&#10;[Peer]&#10;PublicKey = …&#10;Endpoint = tucasa.ejemplo.org:51820&#10;AllowedIPs = 0.0.0.0/0" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">${draft}</textarea>
       <div class="row wrap" style="margin-top:8px">
         <label class="btn" for="eg-file" style="cursor:pointer">Cargar archivo…</label><input id="eg-file" type="file" style="display:none">
         <button class="btn primary grow" id="eg-save">Guardar y activar</button>
       </div>
-      <p class="muted" style="font-size:12.5px;margin:8px 0 0">La clave privada se guarda solo en el VPS (<code>/etc/wireguard</code>, solo root) y no vuelve a mostrarse. Tu servidor de casa debe permitir <code>0.0.0.0/0</code>, reenviar paquetes y hacer NAT.</p>`;
+      <p class="muted" style="font-size:12.5px;margin:8px 0 0">${eg.confView ? 'Donde pone <code>(guardada)</code> se conserva la clave que ya está en el VPS: déjalo así salvo que quieras cambiarla. ' : ''}La clave privada se guarda solo en el VPS (<code>/etc/wireguard</code>, solo root) y no vuelve a mostrarse. Tu servidor de casa debe permitir <code>0.0.0.0/0</code>, reenviar paquetes y hacer NAT.</p>`;
     return `
       <p style="margin-top:0">${state1}</p>
       ${eg.active && eg.directIp ? `<p class="muted" style="margin-top:-6px;font-size:13px">IP del VPS: ${esc(eg.directIp)}</p>` : ''}
@@ -1520,7 +1535,7 @@ async function settingsModal(section) {
       ${eg.configured ? `<div class="row wrap" style="margin-bottom:12px">
         ${eg.active ? '<button class="btn" id="eg-reconnect">Reconectar</button><button class="btn" id="eg-off">Desactivar</button>' : '<button class="btn primary" id="eg-on">Activar</button>'}
         <button class="btn danger" id="eg-remove">Quitar configuración</button></div>
-      <details id="eg-replace"${egDraft ? ' open' : ''}><summary class="muted" style="cursor:pointer;margin-bottom:8px">Sustituir la configuración…</summary>${form}</details>` : form}`;
+      <details id="eg-replace"${egDraft ? ' open' : ''}><summary class="muted" style="cursor:pointer;margin-bottom:8px">${eg.confView ? 'Editar la configuración…' : 'Sustituir la configuración…'}</summary>${form}</details>` : form}`;
   };
 
   const genPass = () => {
@@ -1533,8 +1548,8 @@ async function settingsModal(section) {
     if (!d) return '<p class="muted" style="margin:0">No se pudo cargar la lista de usuarios.</p>';
     const h = d.helper || {};
     const warn = !h.ready
-      ? '<div class="banner err" style="margin-bottom:10px">Falta instalar el ayudante del sistema (una sola vez, por SSH):<pre class="code" style="margin:8px 0 0">sudo /opt/opencode-cloud/deploy/multiuser.sh setup</pre></div>'
-      : (h.outdated ? '<div class="banner" style="margin-bottom:10px">El ayudante del sistema está desactualizado. Ejecuta de nuevo <code>sudo /opt/opencode-cloud/deploy/multiuser.sh setup</code>.</div>' : '');
+      ? `<div class="banner err" style="margin-bottom:10px">Falta instalar el ayudante del sistema (una sola vez, por SSH):${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}</div>`
+      : (h.outdated ? `<div class="banner" style="margin-bottom:10px">El ayudante del sistema está desactualizado. Ejecuta de nuevo este comando por SSH:${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}</div>` : '');
     const rows = d.users.map((u) => {
       const chip = u.role === 'admin' ? '<span class="chip">administrador</span>'
         : u.disabled ? '<span class="chip warn">desactivado</span>'
@@ -1595,7 +1610,7 @@ async function settingsModal(section) {
     <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button>${canAdmin ? '<button class="btn" id="oc-upgrade">Actualizar OpenCode</button>' : ''}<button class="btn ghost" id="oc-logs">Ver registro</button></div>
     <div id="oc-logbox"></div>
 
-    ${usersData || settings.canManageUsers ? `<h3 id="sec-users">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : (canAdmin ? `<h3 id="sec-users">Usuarios</h3><div class="hint">El modo multiusuario no está activado. Para poder crear usuarios con su propio espacio, ejecuta una vez por SSH en el VPS:<br><code>sudo /opt/opencode-cloud/deploy/multiuser.sh setup</code><br>y vuelve a abrir los ajustes. (Requiere haber actualizado antes a la v0.8.0 o superior.)</div>` : '')}
+    ${usersData || settings.canManageUsers ? `<h3 id="sec-users">Usuarios</h3><div id="users-block">${usersBlock()}</div>` : (canAdmin ? `<h3 id="sec-users">Usuarios</h3><div class="hint">El modo multiusuario no está activado. Para poder crear usuarios con su propio espacio, ejecuta una vez por SSH en el VPS:${cmdBox('sudo /opt/opencode-cloud/deploy/multiuser.sh setup', 'margin-top:8px')}y vuelve a abrir los ajustes. (Requiere haber actualizado antes a la v0.8.0 o superior.)</div>` : '')}
 
     ${canAdmin ? `<h3 id="sec-egress">Salida a internet (WireGuard)</h3>
     <div id="eg-block">${egressBlock()}</div>

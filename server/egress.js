@@ -67,6 +67,7 @@ export function helperInfo() {
     handshakeAge: fresh && Number.isFinite(hl.handshakeAge) ? hl.handshakeAge : null,
     endpoint: hl?.endpoint || '',
     address: hl?.address || '',
+    confView: typeof hl?.view === 'string' ? hl.view.replace(/\\n/g, '\n') : '',
     directIp: h.directIp || '',
     tunnelIp: h.tunnelIp || '',
     message: h.message || '',
