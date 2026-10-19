@@ -769,7 +769,7 @@ router.post(
 );
 
 // --- Actualizaciones de esta aplicación (desde GitHub) ---
-router.get('/update/status', wrap(async (req, res) => res.json(await updater.check({ refresh: req.query.refresh === '1' }))));
+router.get('/update/status', wrap(async (req, res) => res.json(req.query.refresh === '1' ? await updater.check({ refresh: true }) : await updater.peek())));
 // Tras actualizar el código, los espacios de los usuarios también se reinician para usar la versión nueva
 router.post('/update/apply', notInstance, wrap(async (req, res) => { const r = await updater.apply(); if (config.multiuser) instances.fire('restart-all'); res.json(r); }));
 router.post('/update/rollback', notInstance, wrap(async (req, res) => { const r = await updater.rollback(); if (config.multiuser) instances.fire('restart-all'); res.json(r); }));

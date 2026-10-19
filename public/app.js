@@ -1460,6 +1460,7 @@ function projectMenuModal(id) {
 /* ============================== Ajustes y actualizaciones ============================== */
 async function settingsModal(section) {
   const m = openModal('Ajustes', '<p class="muted">Cargando…</p>', { wide: true });
+  const usersP = state.multiuser ? api('GET', '/api/users').catch(() => null) : Promise.resolve(null);
   const [settings, gh, oc, upd, models, eg0] = await Promise.all([
     api('GET', '/api/settings'),
     api('GET', '/api/github/status').catch(() => ({ connected: false })),
@@ -1470,7 +1471,7 @@ async function settingsModal(section) {
   ]);
   let eg = eg0;
   const canAdmin = settings.canAdmin !== false; // en el espacio de un usuario, actualizaciones, WireGuard y OpenCode los gestiona el administrador
-  let usersData = settings.canManageUsers ? await api('GET', '/api/users').catch(() => null) : null;
+  let usersData = settings.canManageUsers ? await usersP : null;
   state.update = upd;
   renderSidebar();
 
@@ -1493,7 +1494,7 @@ async function settingsModal(section) {
       ${u.error ? `<div class="banner err" style="margin-bottom:10px">No se pudo consultar GitHub: ${esc(u.error)}</div>` : ''}
       ${u.behind ? `<div class="banner" style="margin-bottom:10px"><strong>${u.behind} cambio${u.behind > 1 ? 's' : ''} disponible${u.behind > 1 ? 's' : ''}</strong> (${esc(u.latest || '')})
         <div class="log" style="margin-top:6px">${u.commits.map((c) => `<div><span class="h">${esc(c.hash)}</span>${esc(c.subject)}<br><span class="muted">${esc(c.author)} · ${esc(c.when)}</span></div>`).join('')}</div></div>`
-        : (!u.error ? '<p class="muted">Estás en la última versión.</p>' : '')}
+        : (u.pending ? '<p class="muted">Buscando actualizaciones en GitHub…</p>' : !u.error ? '<p class="muted">Estás en la última versión.</p>' : '')}
       ${u.dirty ? '<div class="banner err" style="margin-bottom:10px">Hay cambios locales sin confirmar en la instalación: la actualización automática está bloqueada.</div>' : ''}
       <div class="row wrap">
         <button class="btn" id="upd-check">Buscar actualizaciones</button>
@@ -1671,6 +1672,15 @@ async function settingsModal(section) {
     });
   };
   rebind();
+  if (state.update?.pending) {
+    // La comprobación en GitHub va en segundo plano: se refresca el bloque cuando termina
+    let tries = 0;
+    const t = setInterval(async () => {
+      if (!document.body.contains(m.el) || ++tries > 12) { clearInterval(t); return; }
+      const u = await api('GET', '/api/update/status').catch(() => null);
+      if (u && !u.pending) { clearInterval(t); state.update = u; const el = $('#upd-block', m.el); if (el) { el.innerHTML = updateBlock(); rebind(); } renderSidebar(); }
+    }, 2500);
+  }
 
   const egRefresh = async () => { eg = await api('GET', '/api/egress?force=1').catch(() => eg); $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); };
   const egAfter = async (r, okMsg) => {

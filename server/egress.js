@@ -28,11 +28,15 @@ async function lookup() {
 
 export async function status({ force = false } = {}) {
   const tunnel = tunnelUp();
-  if (!force && cache && cache.tunnel === tunnel && Date.now() - cache.at < TTL) return { iface: IFACE, ...cache, ...helperInfo() };
+  const fresh = cache && cache.tunnel === tunnel && Date.now() - cache.at < TTL;
+  if (!force && fresh) return { iface: IFACE, ...cache, ...helperInfo() };
   inflight ||= lookup().finally(() => { inflight = null; });
-  const ip = await inflight;
-  cache = { at: Date.now(), tunnel, ip };
-  return { iface: IFACE, ...cache, ...helperInfo() };
+  const refresh = inflight.then((ip) => { cache = { at: Date.now(), tunnel, ip }; return cache; });
+  // Con datos anteriores se responde al instante (se actualizan en segundo plano); sin ellos se espera poco
+  if (!force && cache) return { iface: IFACE, ...cache, tunnel, ...helperInfo() };
+  const got = await Promise.race([refresh, new Promise((r) => setTimeout(() => r(null), force ? 6000 : 1500))]);
+  const c = got || { at: 0, tunnel, ip: null };
+  return { iface: IFACE, ...c, tunnel, ...helperInfo() };
 }
 
 // --- Ayudante del sistema (deploy/egress.sh setup) ---

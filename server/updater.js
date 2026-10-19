@@ -36,6 +36,16 @@ export async function current() {
   return { supported: Boolean(remote), version: await readVersion(), sha, remote, branch: config.updateBranch, underSystemd };
 }
 
+// Consulta rápida para la WebUI: devuelve lo último que se sabe (o solo lo local) sin esperar a GitHub,
+// y si no hay datos recientes lanza la comprobación en segundo plano.
+let bg = null;
+export async function peek() {
+  if (cache) return cache;
+  bg ||= check({ refresh: true }).catch(() => null).finally(() => { bg = null; });
+  const info = await current();
+  return { ...info, behind: 0, commits: [], pending: true };
+}
+
 export async function check({ refresh = true } = {}) {
   if (!refresh && cache) return cache;
   const info = await current();
