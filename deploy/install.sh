@@ -284,6 +284,11 @@ systemctl daemon-reload
 systemctl enable "$SERVICE" >/dev/null
 systemctl restart "$SERVICE"
 
+# Aislamiento: la app (pasarela) solo gestiona usuarios; el agente y los proyectos corren siempre en el espacio de un usuario
+# (ocu-<nombre>), también el del administrador. Sin esto, el agente tendría los mismos permisos que la WebUI.
+log "Configurando el aislamiento de usuarios"
+APP_USER="$APP_USER" APP_DIR="$APP_DIR" DATA_DIR="$DATA_DIR" bash "$APP_DIR/deploy/multiuser.sh" setup
+
 # ---------------------------------------------------------------- HTTPS con Caddy (opcional)
 if [ -n "$DOMAIN" ]; then
   [[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "DOMAIN no válido"
@@ -296,7 +301,13 @@ if [ -n "$DOMAIN" ]; then
     apt-get install -y caddy
   fi
   log "Configurando Caddy para $DOMAIN"
+  # admin off: sin la API de administración de Caddy (localhost:2019), que cualquier proceso local podría usar para
+  # cambiar a dónde se envía el tráfico. Los cambios de configuración se aplican con 'systemctl restart caddy'.
   cat > /etc/caddy/Caddyfile <<EOF
+{
+	admin off
+}
+
 $DOMAIN {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:$PORT {

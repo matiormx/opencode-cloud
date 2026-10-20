@@ -89,7 +89,7 @@ app.post(
     }
     keys.forEach((k) => auth.clearFailures(k));
     auth.setCookie(res, auth.createSession(user.role === 'admin' ? '' : user.name));
-    if (user.role !== 'admin') instances.probe(user.name).then((up) => { if (!up) instances.nudge(user.name); });
+    if (config.multiuser) instances.probe(user.name).then((up) => { if (!up) instances.nudge(user.name); });
     res.json({ ok: true, user });
   }),
 );
@@ -206,7 +206,8 @@ router.post('/skills/update', wrap(async (req, res) => res.json({ ...(await skil
 router.delete('/skills/:name', wrap(async (req, res) => { skills.remove(String(req.params.name)); res.json(skillsView()); }));
 
 // --- Ajustes ---
-const publicSettings = () => {
+const isAdminReq = (req) => !config.instance || req.headers['x-oc-role'] === 'admin';
+const publicSettings = (admin = !config.instance) => {
   const s = store.getSettings();
   return {
     githubTokenSet: Boolean(s.githubToken),
@@ -214,13 +215,13 @@ const publicSettings = () => {
     gitEmail: s.gitEmail,
     ocPermission: config.ocPermission,
     // Qué puede gestionar este espacio: en el de un usuario, la actualización de la app, la salida WireGuard y OpenCode las gestiona el administrador
-    mode: config.instance ? 'instance' : config.multiuser ? 'owner' : 'single',
-    canAdmin: !config.instance,
-    canManageUsers: config.multiuser,
+    mode: config.instance && !admin ? 'instance' : config.multiuser || config.instance ? 'owner' : 'single',
+    canAdmin: admin,
+    canManageUsers: config.multiuser || (config.instance && admin),
   };
 };
 
-router.get('/settings', (req, res) => res.json(publicSettings()));
+router.get('/settings', (req, res) => res.json(publicSettings(isAdminReq(req))));
 
 router.put(
   '/settings',
@@ -230,7 +231,7 @@ router.put(
     if (typeof gitName === 'string' && gitName.trim()) patch.gitName = gitName.trim().slice(0, 100);
     if (typeof gitEmail === 'string' && /^[^\s@]+@[^\s@]+$/.test(gitEmail.trim())) patch.gitEmail = gitEmail.trim().slice(0, 200);
     store.updateSettings(patch);
-    res.json(publicSettings());
+    res.json(publicSettings(isAdminReq(req)));
   }),
 );
 
@@ -949,6 +950,11 @@ router.post(
   '/opencode/upgrade',
   notInstance,
   wrap(async (req, res) => {
+    if (config.multiuser) {
+      // El OpenCode de todos los espacios es una copia de root: se actualiza con el ayudante, que reinicia los espacios
+      const r = await instances.request('upgrade-opencode');
+      return res.json({ ok: true, output: r.message || 'OpenCode actualizado' });
+    }
     const output = await oc.upgrade();
     await oc.restart();
     res.json({ ok: true, output });
@@ -971,11 +977,13 @@ app.use((err, req, res, next) => {
 });
 
 // ---------- Arranque ----------
-oc.start();
+// La pasarela del modo multiusuario no ejecuta al agente: OpenCode corre en el espacio de cada usuario (incluido el administrador)
+const gatewayOnly = config.multiuser && !config.instance;
+if (!gatewayOnly) oc.start();
 if (!config.instance) updater.startPeriodicCheck();
-queue.start();
+if (!gatewayOnly) queue.start();
 sysmon.start();
-reqmon.start();
+if (!gatewayOnly) reqmon.start();
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`opencode-cloud escuchando en http://${config.host}:${config.port}  (datos: ${config.dataDir})${config.instance ? ` [espacio de ${config.instanceUser || 'usuario'}]` : config.multiuser ? ' [multiusuario]' : ''}`);

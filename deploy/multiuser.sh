@@ -4,7 +4,8 @@
 # Cada usuario tiene su propio usuario de Linux (ocu-<nombre>), su propia carpeta (/var/lib/opencode-users/<nombre>),
 # su propio OpenCode, sus claves de API y su token de GitHub, y se ejecuta como un servicio systemd aparte
 # (opencode-cloud-user@<nombre>). Uno no puede leer los archivos ni los procesos de otro.
-# La app actual pasa a ser la pasarela: tu cuenta de administrador sigue funcionando igual, sin migrar nada.
+# La app pasa a ser solo la pasarela (login, usuarios, actualizaciones, red): NO ejecuta al agente ni ve los proyectos.
+# El administrador tiene también su propio espacio (ocu-admin), como cualquier otro usuario.
 #
 # Instalación única (como root). Después, los usuarios se crean y gestionan desde Ajustes → Usuarios:
 #   sudo /opt/opencode-cloud/deploy/multiuser.sh setup
@@ -149,6 +150,18 @@ do_delete() { # name purge(0|1)
   fi
 }
 
+# Actualiza OpenCode con la copia del usuario de la app y la publica como copia compartida (de root) para todos los espacios
+upgrade_opencode() {
+  local app_home src ver
+  app_home="$(getent passwd "$APP_USER" | cut -d: -f6)"; src="$app_home/.opencode/bin/opencode"
+  [ -x "$src" ] || { echo "No encuentro OpenCode en $src"; return 1; }
+  runuser -u "$APP_USER" -- env HOME="$app_home" "$src" upgrade >/dev/null 2>&1 || { echo "opencode upgrade falló"; return 1; }
+  install -m 755 -o root -g root "$src" "$OC_SHARED.new" && mv -f "$OC_SHARED.new" "$OC_SHARED"
+  ver="$("$OC_SHARED" --version 2>/dev/null | head -n1 || true)"
+  while read -r n _; do [ -n "$n" ] && sys systemctl restart "$(unit_of "$n")" >/dev/null 2>&1 || true; done < "$INDEX" 2>/dev/null || true
+  echo "${ver:-ok}"
+}
+
 # ---------------------------------------------------------------- Modo ayudante (lo lanza systemd como root)
 worker() {
   local req="$INBOX/request" action id name rest
@@ -181,6 +194,9 @@ worker() {
     restart-all)
       while read -r n _; do [ -n "$n" ] && sys systemctl restart "$(unit_of "$n")" >/dev/null 2>&1 || true; done < "$INDEX" 2>/dev/null || true
       write_status "$id" true "Espacios reiniciados" ;;
+    upgrade-opencode)
+      if err="$(upgrade_opencode 2>&1)"; then write_status "$id" true "OpenCode actualizado: ${err:-ok}"
+      else write_status "$id" false "${err:-No se pudo actualizar OpenCode}"; fi ;;
     sync) write_status "$id" true "Hecho" ;;
     *) write_status "$id" false "Acción no reconocida" ;;
   esac
@@ -266,9 +282,21 @@ EOF
   log "Reiniciando $SERVICE en modo multiusuario"
   systemctl restart "$SERVICE"
 
+  # El administrador también trabaja en un espacio propio (ocu-<admin>): la pasarela no ve proyectos ni ejecuta al agente
+  local owner
+  owner="$(node -e 'try{const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(d.owner||"admin")}catch{process.stdout.write("admin")}' "$DATA_DIR/users.json" 2>/dev/null || echo admin)"
+  [[ "$owner" =~ $NAME_RE ]] || owner=admin
+  mkdir -p "$OUTBOX"
+  if [ -z "$(idx_of "$owner")" ]; then
+    log "Creando el espacio del administrador ($owner)"
+    if err="$(precheck_create "$owner" 2>&1)" && err="$(do_create "$owner" 2>&1)"; then log "Espacio de $owner creado"
+    else warn "No se pudo crear el espacio de $owner: ${err:-error}"; do_delete "$owner" 1 >/dev/null 2>&1 || true; fi
+  fi
+
   echo
   log "Listo. Entra en la WebUI → Ajustes → Usuarios para crear usuarios."
-  echo "  Tu cuenta de administrador sigue igual: usuario «admin» y tu contraseña de siempre."
+  echo "  Tu cuenta de administrador sigue igual (usuario «$owner» y tu contraseña), pero tus proyectos viven ahora en su propio espacio."
+  echo "  Los proyectos que tuvieras en el modo anterior NO se mueven solos: se clonan de nuevo desde GitHub."
   if [ -f /etc/wireguard/ocegress.conf ]; then
     warn "Tienes salida por WireGuard: para que también cubra a los usuarios, ejecuta de nuevo"
     warn "  sudo $APP_DIR/deploy/egress.sh setup   y vuelve a guardar la configuración en Ajustes."
@@ -296,5 +324,6 @@ case "${1:-status}" in
   worker) worker ;;
   status) status ;;
   disable) disable_mode ;;
-  *) die "Uso: $0 setup | status | disable" ;;
+  upgrade-opencode) upgrade_opencode ;;
+  *) die "Uso: $0 setup | status | disable | upgrade-opencode" ;;
 esac

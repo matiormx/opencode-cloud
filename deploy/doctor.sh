@@ -107,9 +107,15 @@ else
   systemctl is-active --quiet opencode-browser.path 2>/dev/null && ok "Ayudante de Chromium instalado (Chromium aún no instalado: Ajustes → Extensiones)" || echo "  · Sin Playwright (opcional): sudo $APP_DIR/deploy/browser.sh setup"
 fi
 
-sec "Multiusuario (opcional)"
+sec "Aislamiento de usuarios"
+if command -v caddy >/dev/null && [ -f /etc/caddy/Caddyfile ]; then
+  grep -qE '^\s*admin\s+off' /etc/caddy/Caddyfile && ok "Caddy sin API de administración local (admin off)" || warn "Caddy tiene la API local :2019 activa: cualquier proceso del VPS podría reconfigurarlo (añade «{ admin off }» al principio del Caddyfile y reinicia Caddy)"
+fi
+if ! grep -q '^MULTIUSER=1' "$ENV_FILE" 2>/dev/null; then
+  bad "Aislamiento desactivado: el agente corre con los mismos permisos que la WebUI"; hint "sudo $APP_DIR/deploy/multiuser.sh setup"
+fi
 if grep -q '^MULTIUSER=1' "$ENV_FILE" 2>/dev/null; then
-  ok "Modo multiusuario activado"
+  ok "Aislamiento activado (la pasarela no ejecuta al agente)"
   systemctl is-active --quiet opencode-multiuser.path && ok "Ayudante de usuarios instalado" || bad "Falta el ayudante: sudo $APP_DIR/deploy/multiuser.sh setup"
   [ -x /usr/local/lib/opencode-cloud/opencode ] && ok "OpenCode compartido presente" || bad "Falta /usr/local/lib/opencode-cloud/opencode (sudo $APP_DIR/deploy/multiuser.sh setup)"
   if [ -s /etc/opencode-cloud/instances/index ]; then

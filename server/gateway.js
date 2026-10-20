@@ -8,6 +8,11 @@ import * as users from './users.js';
 
 // Rutas que atiende siempre la pasarela, para cualquier usuario
 const LOCAL = new Set(['/health', '/me', '/login', '/logout', '/password']);
+// Lo que solo gestiona la pasarela y solo para el administrador: usuarios, actualizar la app, red y recursos del servidor.
+// Todo lo demás (proyectos, el agente, claves, GitHub) va al espacio propio del administrador (ocu-<admin>), igual que el de cualquier usuario:
+// la pasarela no ve ni toca los proyectos, y el agente no corre con los permisos de la pasarela.
+const ADMIN_LOCAL = ['/users', '/update', '/egress', '/system', '/extensions/browser', '/opencode/upgrade'];
+const isAdminLocal = (p) => ADMIN_LOCAL.some((x) => p === x || p.startsWith(`${x}/`));
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length']);
 
 const seen = new Map();
@@ -16,18 +21,21 @@ export const lastSeen = (name) => seen.get(name) || 0;
 export function proxy(req, res, next) {
   if (!config.multiuser) return next();
   const info = auth.sessionInfo(req);
-  if (!info || info.user === '') return next(); // sin sesión (lo resuelve requireAuth) o administrador (atiende la pasarela)
-  const name = info.user;
-  if (!users.isActive(name)) {
+  if (!info) return next(); // sin sesión: lo resuelve requireAuth
+  const admin = info.user === '';
+  const name = admin ? users.ownerName() : info.user;
+  if (!admin && !users.isActive(name)) {
     auth.dropSessions(name);
     return res.status(401).json({ error: 'No autenticado' });
   }
   if (LOCAL.has(req.path)) return next();
-  if (req.path.startsWith('/users')) return res.status(403).json({ error: 'Solo el administrador puede gestionar usuarios' });
+  if (admin && isAdminLocal(req.path)) return next();
+  if (admin && req.path === '/activity' && req.method === 'GET') return adminActivity(req, res, name);
+  if (!admin && req.path.startsWith('/users')) return res.status(403).json({ error: 'Solo el administrador puede gestionar usuarios' });
 
   seen.set(name, Date.now());
   const k = instances.keys(name);
-  if (!k) return res.status(503).json({ error: 'Tu espacio todavía no está preparado. Pide al administrador que lo revise.' });
+  if (!k) return res.status(503).json({ error: admin ? 'Tu espacio todavía no está preparado. En el VPS: sudo /opt/opencode-cloud/deploy/multiuser.sh setup' : 'Tu espacio todavía no está preparado. Pide al administrador que lo revise.' });
 
   const headers = {};
   for (const [h, v] of Object.entries(req.headers)) {
@@ -36,6 +44,7 @@ export function proxy(req, res, next) {
   }
   headers['x-oc-gateway'] = k.secret;
   headers['x-oc-user'] = name;
+  if (admin) headers['x-oc-role'] = 'admin';
   headers['x-forwarded-for'] = req.ip;
   if (req.headers['content-length']) headers['content-length'] = req.headers['content-length'];
   if (req.headers['transfer-encoding']) headers['transfer-encoding'] = req.headers['transfer-encoding'];
@@ -54,4 +63,22 @@ export function proxy(req, res, next) {
   });
   res.on('close', () => up.destroy());
   req.pipe(up);
+}
+
+// Actividad del administrador: la de su propio espacio más la de los espacios de los demás (que solo conoce la pasarela)
+function adminActivity(req, res, name) {
+  const k = instances.keys(name);
+  const done = (own) => {
+    Promise.all(users.list().filter((u) => u.role !== 'admin' && !u.disabled).map(async (u) => ({ name: u.name, ...((await instances.activity(u.name)) || {}) })))
+      .then((rows) => res.json({ busy: [], sessions: [], queued: 0, requests: null, ...own, others: rows.filter((r) => r.busy || r.queued) }))
+      .catch(() => res.json({ busy: [], sessions: [], queued: 0, requests: null, ...own, others: [] }));
+  };
+  if (!k) return done({});
+  const rq = http.request({ host: '127.0.0.1', port: k.port, path: '/api/activity', method: 'GET', timeout: 8000, headers: { 'x-oc-gateway': k.secret, 'x-oc-user': name, 'x-oc-role': 'admin' } }, (r) => {
+    let b = ''; r.setEncoding('utf8'); r.on('data', (d) => { if (b.length < 2_000_000) b += d; });
+    r.on('end', () => { let j = {}; try { j = JSON.parse(b); } catch { /* sin datos */ } done(r.statusCode === 200 && j && typeof j === 'object' ? j : {}); });
+  });
+  rq.on('timeout', () => rq.destroy());
+  rq.on('error', () => { instances.nudge(name); done({}); });
+  rq.end();
 }
