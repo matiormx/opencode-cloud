@@ -14,6 +14,7 @@ import * as gateway from './gateway.js';
 import * as gh from './github.js';
 import * as instances from './instances.js';
 import * as oc from './opencode.js';
+import * as preview from './preview.js';
 import * as queue from './queue.js';
 import * as restarts from './restarts.js';
 import * as reqmon from './reqmon.js';
@@ -35,6 +36,9 @@ app.use((req, res, next) => {
   if (config.multiuser && !config.instance && req.url.startsWith('/admin/api/')) { req.adminCtx = true; req.url = req.url.slice('/admin'.length); }
   next();
 });
+// Vista previa (/preview/…): se atiende antes que nada porque su token sustituye a la cookie y el cuerpo no se toca
+app.use(preview.intercept);
+app.use(preview.instanceServe);
 // Modo multiusuario: las peticiones de los usuarios que no son el administrador se reenvían a su espacio sin leer el cuerpo
 app.use('/api', gateway.proxy);
 app.use(express.json({ limit: '14mb' })); // los mensajes con imágenes van en base64
@@ -478,6 +482,7 @@ router.delete(
 // --- Proyectos ---
 const loadProjects = () => store.load('projects', []);
 const saveProjects = (list) => store.save('projects', list);
+preview.init((id) => { const p = loadProjects().find((x) => x.id === id); return p ? path.join(config.projectsDir, p.dir) : null; });
 const withPath = (p) => ({ ...p, path: path.join(config.projectsDir, p.dir) });
 
 function getProject(req) {
@@ -811,6 +816,12 @@ router.post(
     res.json(out);
   }),
 );
+
+// Vista previa: qué servidores web tiene en marcha el usuario (y si el proyecto tiene un index.html que servir)
+router.get('/preview/ports', wrap(async (req, res) => {
+  const id = String(req.query.project || '');
+  res.json({ ports: await preview.ports(), project: preview.hasIndex(id) ? `s${id}` : '' });
+}));
 
 router.get('/projects/:id/download', wrap(async (req, res) => {
   const p = getProject(req);

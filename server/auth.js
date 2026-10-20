@@ -111,7 +111,7 @@ export function sessionInfo(req) {
 }
 
 // En modo instancia no hay login: solo se aceptan las peticiones que traen el secreto de la pasarela
-function fromGateway(req) {
+export function fromGateway(req) {
   const got = req.headers['x-oc-gateway'];
   if (typeof got !== 'string' || !got) return false;
   const a = crypto.createHash('sha256').update(got).digest();

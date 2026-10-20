@@ -141,6 +141,20 @@ function post(name, path, payload = {}, timeout = 2500) {
     rq.end(body);
   });
 }
+// GET interno a la instancia de un usuario (con el secreto de la pasarela)
+export function get(name, apiPath, timeout = 4000) {
+  const k = keys(name);
+  if (!k) return Promise.resolve({ status: 0, json: null });
+  return new Promise((resolve) => {
+    const rq = http.request({ host: '127.0.0.1', port: k.port, path: apiPath, method: 'GET', timeout, headers: { 'x-oc-gateway': k.secret, 'x-oc-user': name } }, (r) => {
+      let b = ''; r.setEncoding('utf8'); r.on('data', (d) => { if (b.length < 100000) b += d; });
+      r.on('end', () => { let json = null; try { json = JSON.parse(b); } catch { /* sin cuerpo */ } resolve({ status: r.statusCode || 0, json }); });
+    });
+    rq.on('timeout', () => rq.destroy());
+    rq.on('error', () => resolve({ status: 0, json: null }));
+    rq.end();
+  });
+}
 export async function setDrain(name, on) { return (await post(name, '/api/drain', { on: Boolean(on) })).status === 200; }
 // Pausa lo que esté trabajando en el espacio (cancela cada turno y apunta qué conversaciones eran) y bloquea tareas nuevas.
 // status 404 = espacio con una versión anterior, que no sabe pausar.

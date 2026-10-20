@@ -2007,6 +2007,48 @@ function newProjectModal() {
   $('#np-name', root).focus();
 }
 
+// Vista previa del proyecto: un servidor que OpenCode haya arrancado (puerto) o la carpeta del proyecto servida tal cual.
+// Va en un iframe del mismo origen (ver server/preview.js).
+async function previewModal(pid) {
+  const p = state.projects.find((x) => x.id === pid);
+  const m = openModal('Vista previa', '<div class="muted" id="pv-body">Buscando servidores…</div>', { wide: true });
+  const body = $('#pv-body', m.el);
+  let info = null; let cur = '';
+  const targets = () => [...(info.project ? [{ id: info.project, label: 'Carpeta del proyecto (index.html)' }] : []), ...info.ports.map((x) => ({ id: String(x.port), label: `Servidor en el puerto ${x.port}` }))];
+  const url = () => `${info.base}${cur}/`;
+  const draw = () => {
+    const t = targets();
+    if (!t.length) {
+      body.innerHTML = `<p style="margin:0 0 8px">No hay nada que previsualizar todavía.</p>
+        <p class="muted" style="margin:0 0 12px">Pídele a OpenCode, por ejemplo: «arranca el proyecto para verlo» (un servidor de desarrollo en cualquier puerto). Si el proyecto es una web sencilla con un <code>index.html</code>, se muestra directamente.</p>
+        <button class="btn" id="pv-refresh" type="button">Buscar de nuevo</button>`;
+      return;
+    }
+    if (!t.some((x) => x.id === cur)) cur = t[0].id;
+    body.innerHTML = `<div class="row wrap" style="margin-bottom:8px;gap:8px">
+        <select id="pv-sel" class="grow" aria-label="Qué ver">${t.map((x) => `<option value="${esc(x.id)}"${x.id === cur ? ' selected' : ''}>${esc(x.label)}</option>`).join('')}</select>
+        <button class="btn small" id="pv-reload" type="button">Recargar</button>
+        <a class="btn small" id="pv-open" href="${esc(url())}" target="_blank" rel="noopener">Abrir aparte</a>
+        <button class="btn small" id="pv-refresh" type="button">Buscar</button></div>
+      <iframe id="pv-frame" title="Vista previa de ${esc(p?.name || 'proyecto')}" src="${esc(url())}" style="width:100%;height:min(60dvh,600px);border:1px solid var(--line);border-radius:12px;background:#fff"></iframe>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Funciona con páginas y apps que carguen de forma normal. Las recargas en vivo (HMR) no funcionan: pulsa Recargar.</p>`;
+  };
+  const load = async () => {
+    try { info = await api('GET', `/api/preview/ports?project=${encodeURIComponent(pid)}`); info.base = '/preview/'; draw(); } catch (e) { body.innerHTML = `<div class="banner err">${esc(e.message)}</div>`; }
+  };
+  m.el.addEventListener('change', (e) => {
+    if (e.target.id !== 'pv-sel') return;
+    cur = e.target.value;
+    $('#pv-frame', m.el).src = url();
+    $('#pv-open', m.el).href = url();
+  });
+  m.el.addEventListener('click', (e) => {
+    if (e.target.closest('#pv-reload')) { const f = $('#pv-frame', m.el); if (f) f.src = url(); }
+    if (e.target.closest('#pv-refresh')) { body.innerHTML = '<div class="muted">Buscando servidores…</div>'; load(); }
+  });
+  load();
+}
+
 function projectMenuModal(id) {
   const p = state.projects.find((x) => x.id === id);
   if (!p) return;
@@ -2014,11 +2056,14 @@ function projectMenuModal(id) {
     <div class="field"><label>Nombre</label><input id="pm-name" type="text" value="${esc(p.name)}" maxlength="80"></div>
     <button class="btn" id="pm-save">Guardar nombre</button>
     <hr class="sep">
+    <button class="btn" id="pm-prev" type="button">Vista previa</button>
+    <p class="muted" style="font-size:12.5px;margin:6px 0 10px">Ve aquí lo que OpenCode está construyendo, sin subirlo a GitHub.</p>
     <a class="btn" id="pm-zip" href="/api/projects/${esc(id)}/download" download>${ico(I.download, 'width="16" height="16"')} Descargar proyecto (.zip)</a>
     <p class="muted" style="font-size:12.5px;margin:6px 0 0">Todos los archivos, sin node_modules ni .git.</p>
     <hr class="sep">
     <label class="row" style="margin-bottom:10px"><input type="checkbox" id="pm-files"> <span>Eliminar también los archivos del servidor</span></label>
     <button class="btn danger" id="pm-del">Eliminar proyecto</button>`);
+  $('#pm-prev', m.el).addEventListener('click', () => { m.close(); setTimeout(() => previewModal(id), 60); });
   $('#pm-save', m.el).addEventListener('click', async () => {
     try { await api('PATCH', `/api/projects/${id}`, { name: $('#pm-name', m.el).value }); await loadProjects(); if (state.project?.id === id) state.project = state.projects.find((x) => x.id === id); m.close(); renderAll(); } catch (e) { toast(e.message, 'err'); }
   });

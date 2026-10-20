@@ -87,6 +87,15 @@ El instalador se puede volver a ejecutar sin riesgo: actualiza el código, conse
 
 Mientras OpenCode trabaja, el botón de enviar pasa a **Añadir a la cola** en cuanto escribes algo (y vuelve a ser **Detener** con el campo vacío). Los mensajes en espera aparecen encima del cuadro de texto: quita uno con la ✕ o usa **Vaciar**. Al pulsar **Detener** la cola se pone **en pausa** para que no arranque sola otra tarea; usa **Reanudar** para continuar. Máximo 20 mensajes por conversación.
 
+### Probar el proyecto sin GitHub: descargar y vista previa
+
+Menú del proyecto (los tres puntos junto a su nombre):
+
+- **Descargar proyecto (.zip):** todos los archivos, sin `node_modules`, `.git` ni enlaces simbólicos. Se genera al vuelo; el límite es 1,5 GB o 20 000 archivos.
+- **Vista previa:** ve dentro de la app lo que OpenCode está construyendo. Muestra los servidores web que haya arrancado en tu espacio (cualquier puerto, p. ej. `npm run dev`) y, si el proyecto tiene un `index.html`, también la carpeta servida tal cual. Pídele a OpenCode «arranca el proyecto para verlo».
+  - Solo se llega a puertos de tu propio usuario de Linux (se excluyen los de la app y de OpenCode) y al servidor del proyecto no se le envían tus cookies.
+  - Las rutas absolutas del proyecto (`/assets/app.js`, `fetch('/api/x')`) funcionan porque se resuelven por la cabecera Referer. **Límites:** no hay recarga en vivo (HMR) ni WebSockets: pulsa Recargar. Las apps con rutas del navegador sin prefijo (React Router sin `basename`, etc.) pueden verse en blanco: usa rutas con `#` o configura la base. La página se ejecuta con el mismo origen que la app: previsualiza solo código en el que confíes.
+
 ### Sincronizar con GitHub
 
 Panel **Git** (botón arriba a la derecha del proyecto):
@@ -238,7 +247,7 @@ Detalles:
 ## Estructura
 
 ```
-server/   backend Express (auth, proyectos, git, GitHub, proxy a OpenCode, actualizador)
+server/   backend Express (auth, proyectos, git, GitHub, proxy a OpenCode, actualizador, zip y vista previa)
 public/   WebUI sin build (HTML + JS + CSS)
 bin/      set-password.js, git-askpass.sh
 deploy/   install.sh, doctor.sh (diagnóstico), egress.sh (túnel WireGuard opcional), multiuser.sh (varios usuarios opcional), browser.sh (Chromium para Playwright, opcional)

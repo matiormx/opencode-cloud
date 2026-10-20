@@ -36,6 +36,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return; // sin caché, sin interceptar
+  if (url.pathname.startsWith('/preview/') || (req.referrer || '').includes('/preview/')) return; // vista previa: nunca desde la caché
 
   const isNav = req.mode === 'navigate';
   event.respondWith(
