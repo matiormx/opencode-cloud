@@ -2014,6 +2014,9 @@ function projectMenuModal(id) {
     <div class="field"><label>Nombre</label><input id="pm-name" type="text" value="${esc(p.name)}" maxlength="80"></div>
     <button class="btn" id="pm-save">Guardar nombre</button>
     <hr class="sep">
+    <a class="btn" id="pm-zip" href="/api/projects/${esc(id)}/download" download>${ico(I.download, 'width="16" height="16"')} Descargar proyecto (.zip)</a>
+    <p class="muted" style="font-size:12.5px;margin:6px 0 0">Todos los archivos, sin node_modules ni .git.</p>
+    <hr class="sep">
     <label class="row" style="margin-bottom:10px"><input type="checkbox" id="pm-files"> <span>Eliminar también los archivos del servidor</span></label>
     <button class="btn danger" id="pm-del">Eliminar proyecto</button>`);
   $('#pm-save', m.el).addEventListener('click', async () => {

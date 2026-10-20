@@ -21,6 +21,7 @@ import * as skills from './skills.js';
 import * as sysmon from './sysmon.js';
 import * as store from './store.js';
 import * as updater from './updater.js';
+import { sendZip } from './zip.js';
 import * as users from './users.js';
 
 const fsp = fs.promises;
@@ -806,6 +807,11 @@ router.post(
     res.json(out);
   }),
 );
+
+router.get('/projects/:id/download', wrap(async (req, res) => {
+  const p = getProject(req);
+  await sendZip(res, p.path, p.name);
+}));
 
 router.get(
   '/projects/:id/file',
