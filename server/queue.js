@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { config } from './config.js';
 import * as oc from './opencode.js';
+import * as autocommit from './autocommit.js';
 import * as drain from './drain.js';
 import * as store from './store.js';
 
@@ -130,10 +131,12 @@ async function tick() {
         const cur = statusCache.get(dir)?.[items[0].sessionId];
         if (cur && cur.type !== 'idle') continue; // sigue ocupada
         const next = items[0];
+        await autocommit.flush(proj, statusCache.get(dir)); // lo que dejó la tarea anterior queda en un commit antes de empezar la siguiente
         const body = { parts: [{ type: 'text', text: next.text }] };
         if (next.model) body.model = next.model;
         lastDispatch.set(k, Date.now());
         await oc.json('POST', `/session/${next.sessionId}/prompt_async`, { directory: dir, body });
+        autocommit.note(proj.id, next.text);
         data.items = data.items.filter((i) => i.id !== next.id);
         persist();
       } catch (e) {

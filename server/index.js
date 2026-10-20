@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import express from 'express';
 import * as auth from './auth.js';
+import * as autocommit from './autocommit.js';
 import { config } from './config.js';
 import * as drain from './drain.js';
 import * as egress from './egress.js';
@@ -284,6 +285,7 @@ const publicSettings = (admin = !config.instance, adminUrl = '') => {
     adminUrl,
     gitName: s.gitName,
     gitEmail: s.gitEmail,
+    autoCommit: s.autoCommit !== false,
     ocPermission: config.ocPermission,
     // Qué puede gestionar este espacio: en el de un usuario, la actualización de la app, la salida WireGuard y OpenCode las gestiona el administrador
     mode: config.instance && !admin ? 'instance' : config.multiuser || config.instance ? 'owner' : 'single',
@@ -301,6 +303,7 @@ router.put(
     const patch = {};
     if (typeof gitName === 'string' && gitName.trim()) patch.gitName = gitName.trim().slice(0, 100);
     if (typeof gitEmail === 'string' && /^[^\s@]+@[^\s@]+$/.test(gitEmail.trim())) patch.gitEmail = gitEmail.trim().slice(0, 200);
+    if (typeof req.body?.autoCommit === 'boolean') patch.autoCommit = req.body.autoCommit;
     store.updateSettings(patch);
     res.json(publicSettings(isAdminReq(req), String(req.headers['x-oc-admin-url'] || '')));
   }),
@@ -943,6 +946,11 @@ router.post('/projects/:id/upload', wrap(async (req, res) => {
     await fsp.rm(target, { force: true });
     throw err.status ? err : fail('No se pudo guardar el archivo', 500);
   }
+  // Los adjuntos son material de trabajo, no código: se quedan fuera de los commits (y de GitHub) salvo que los añadas a mano
+  try {
+    const ex = path.join(p.path, '.git', 'info', 'exclude');
+    if (fs.existsSync(path.dirname(ex)) && !/^adjuntos\/$/m.test(fs.existsSync(ex) ? fs.readFileSync(ex, 'utf8') : '')) fs.appendFileSync(ex, '\nadjuntos/\n');
+  } catch { /* no es un repositorio git */ }
   res.json({ ok: true, name: path.basename(target), path: `adjuntos/${path.basename(target)}`, size });
 }));
 
@@ -959,6 +967,7 @@ router.post(
     if (m?.providerID && m?.modelID) body.model = { providerID: String(m.providerID), modelID: String(m.modelID) };
     if (req.body?.agent) body.agent = String(req.body.agent);
     await oc.json('POST', `/session/${sid(req)}/prompt_async`, { directory: p.path, body });
+    autocommit.note(p.id, text);
     res.json({ ok: true });
   }),
 );
@@ -1190,7 +1199,7 @@ async function resumePaused() {
       const body = { parts: [{ type: 'text', text: RESUME_TEXT }] };
       if (it.model) body.model = it.model;
       if (it.agent) body.agent = it.agent;
-      try { await oc.json('POST', `/session/${it.sessionId}/prompt_async`, { directory: withPath(pr).path, body }); }
+      try { await oc.json('POST', `/session/${it.sessionId}/prompt_async`, { directory: withPath(pr).path, body }); autocommit.note(pr.id, ''); }
       catch (e) { console.error(`[reanudar] ${it.sessionId}: ${e.message}`); }
     }
     store.save('paused', { items: [] });
@@ -1276,7 +1285,7 @@ if (gatewayOnly) restarts.resume();
 // Si este espacio se reinició con conversaciones pausadas, se retoman al volver OpenCode
 if (!gatewayOnly) { if (store.load('paused', { items: [] }).items?.length) queue.hold(true); resumePaused().catch((e) => console.error('[reanudar]', e.message)); }
 if (!config.instance) updater.startPeriodicCheck();
-if (!gatewayOnly) queue.start();
+if (!gatewayOnly) { queue.start(); autocommit.start(); }
 sysmon.start();
 if (!gatewayOnly) reqmon.start();
 

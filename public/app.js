@@ -2343,6 +2343,10 @@ async function settingsModal(section, { admin = false } = {}) {
         <div class="row"><input id="gh-token" name="gh-pat-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="github_pat_… o ghp_…"><button class="btn primary" id="gh-save">Guardar</button></div>`}
     </div>
 
+    <h3>Commits automáticos</h3>
+    <label class="row" style="margin-bottom:6px"><input type="checkbox" id="g-auto" ${settings.autoCommit === false ? '' : 'checked'}> <span>Hacer commit al terminar cada tarea (y entre las tareas de la cola)</span></label>
+    <p class="muted" style="font-size:12.5px;margin:0 0 4px">Guarda en git todo lo que OpenCode haya cambiado, con lo que pediste como mensaje. No hace push: eso lo decides tú. Los archivos de <code>adjuntos/</code> quedan fuera.</p>
+
     <h3>Identidad de Git</h3>
     <div class="row wrap"><input id="g-name" type="text" class="grow" value="${esc(settings.gitName)}" placeholder="Nombre"><input id="g-email" type="email" class="grow" value="${esc(settings.gitEmail)}" placeholder="correo"><button class="btn" id="g-save">Guardar</button></div>
 
@@ -2646,6 +2650,7 @@ async function settingsModal(section, { admin = false } = {}) {
 
   click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.remove(); settingsModal('conn'); });
   click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.remove(); settingsModal('conn'); });
+  q('#g-auto')?.addEventListener('change', async (e) => { try { await api('PUT', '/api/settings', { autoCommit: e.target.checked }); toast(e.target.checked ? 'Commit automático activado' : 'Commit automático desactivado'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message, 'err'); } });
   click('#g-save', async () => { await api('PUT', '/api/settings', { gitName: q('#g-name').value, gitEmail: q('#g-email').value }); toast('Identidad guardada (se aplica a nuevos commits)'); });
   m.el.querySelectorAll('[data-prov-vis]').forEach((cb) => cb.addEventListener('change', async () => {
     const prev = state.models.hidden || [];

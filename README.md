@@ -100,6 +100,10 @@ Botones arriba, junto a Git (ojo = vista previa, flecha = descargar), y también
   - Solo se llega a puertos de tu propio usuario de Linux (se excluyen los de la app y de OpenCode) y al servidor del proyecto no se le envían tus cookies.
   - Las rutas absolutas del proyecto (`/assets/app.js`, `fetch('/api/x')`) funcionan porque se resuelven por la cabecera Referer. **Límites:** no hay recarga en vivo (HMR) ni WebSockets: pulsa Recargar. Las apps con rutas del navegador sin prefijo (React Router sin `basename`, etc.) pueden verse en blanco: usa rutas con `#` o configura la base. La página se ejecuta con el mismo origen que la app: previsualiza solo código en el que confíes.
 
+### Commits automáticos
+
+Al terminar cada tarea, y también entre una tarea y la siguiente de la cola, la app hace `git add -A` y `git commit` del proyecto, con lo que pediste como mensaje. **Nunca hace push** (eso lo decides tú desde el panel Git). No toca una fusión a medias ni los archivos de `adjuntos/`, y se puede desactivar en Ajustes → Conexiones → «Commits automáticos». Funciona aunque cierres la app: el servidor vigila cuándo termina OpenCode.
+
 ### Sincronizar con GitHub
 
 Panel **Git** (botón arriba a la derecha del proyecto):
