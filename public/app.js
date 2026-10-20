@@ -251,6 +251,8 @@ const state = {
   gitFail: null,
   update: null,
   perms: new Map(),
+  booting: false, // arranque: se cargan proyectos, modelos y la primera conversación
+  loadingChat: false, // se está cargando una conversación
   questions: new Map(), // preguntas pendientes del agente (herramienta question)
   qdraft: new Map(), // lo que lleva marcado/escrito el usuario en cada una
   navOpen: false,
@@ -376,12 +378,22 @@ async function mountApp() {
 
   bindShell();
   updateOnlineBanner();
-  await Promise.all([loadProjects(), loadModels(), loadUpdate(false), loadFeatured(), loadSys(), loadActivity()]);
-  renderAll();
-  const last = store.get('project');
-  const target = state.projects.find((p) => p.id === last) || state.projects[0];
-  if (target) await selectProject(target.id);
-  else renderMessages();
+  state.booting = true;
+  renderTopbar();
+  renderMessages();
+  renderModels();
+  try {
+    await Promise.all([loadProjects(), loadModels(), loadUpdate(false), loadFeatured(), loadSys(), loadActivity()]);
+    state.booting = false;
+    renderAll();
+    const last = store.get('project');
+    const target = state.projects.find((p) => p.id === last) || state.projects[0];
+    if (target) await selectProject(target.id);
+    else renderMessages();
+  } finally {
+    state.booting = false;
+    renderAll();
+  }
   if (!timersStarted) {
     timersStarted = true;
     setInterval(pollStatus, 2500);
@@ -873,13 +885,18 @@ async function selectProject(id) {
   state.perms.clear();
   state.questions.clear();
   store.set('project', id);
+  state.loadingChat = true;
   renderAll();
   connectEvents();
-  await Promise.all([loadSessions(), loadGit()]);
-  const remembered = store.get(`session:${id}`);
-  const target = state.sessions.find((s) => s.id === remembered) || state.sessions[0];
-  if (target) await selectSession(target.id, keepNav);
-  else renderAll();
+  try {
+    await Promise.all([loadSessions(), loadGit()]);
+    const remembered = store.get(`session:${id}`);
+    const target = state.sessions.find((s) => s.id === remembered) || state.sessions[0];
+    if (target) await selectSession(target.id, keepNav);
+  } finally {
+    state.loadingChat = false;
+    renderAll();
+  }
 }
 
 async function loadSessions() {
@@ -902,8 +919,14 @@ async function selectSession(id, keepNav = false) {
   state.questions.clear();
   store.set(`session:${state.project.id}`, id);
   if (!keepNav) state.navOpen = false;
+  state.loadingChat = true;
   renderAll();
-  await refreshMessages(true);
+  try {
+    await refreshMessages(true);
+  } finally {
+    state.loadingChat = false;
+    renderMessages(true);
+  }
   await pollStatus(true);
   loadQueue();
   loadPerms();
@@ -1294,6 +1317,10 @@ function renderMessages(forceScroll = false) {
   const inner = $('#chat-inner');
   if (!chat) return;
   const nearBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 140;
+  if (state.booting || state.loadingChat) {
+    inner.innerHTML = `<div class="boot" role="status" aria-live="polite"><div class="logo boot-logo">${ico(I.code, 'stroke="#fff" stroke-width="2.4"')}</div><p>${state.booting ? 'Conectando con OpenCode…' : 'Cargando la conversación…'}</p><div class="boot-lines" aria-hidden="true"><div class="skel user"></div><div class="skel line" style="width:92%"></div><div class="skel line" style="width:78%"></div><div class="skel line" style="width:56%"></div></div></div>`;
+    return;
+  }
   const open = new Set($$('details[open]', inner).map((d) => d.dataset.key));
 
   if (!state.project) {
@@ -1382,6 +1409,7 @@ function allModels() {
 function renderModels() {
   const btn = $('#model-btn');
   if (!btn) return;
+  if (state.booting) { btn.innerHTML = '<span class="skel" style="width:92px;height:12px"></span>'; btn.dataset.empty = '1'; return; }
   const providers = visibleProviders();
   if (!providers.length) {
     btn.textContent = (state.models?.providers || []).length ? 'Todos los modelos ocultos (Ajustes)' : 'Sin modelos: configura una API key';

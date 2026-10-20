@@ -660,3 +660,18 @@ details.compacted .rbody { margin-top: 8px; color: var(--text); }
 .qopt.on { border-color: var(--accent); background: var(--accent-soft); }
 .qopt.on span { color: var(--text); }
 .qactions { position: sticky; bottom: 0; padding-top: 4px; }
+
+/* Pantalla de carga */
+.splash { height: 100dvh; display: flex; justify-content: center; padding-top: calc(56px + 16dvh); } /* el logo queda donde luego lo deja la pantalla de carga */
+.boot { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 16dvh 24px 0; color: var(--muted); text-align: center; animation: boot-in .35s .12s ease-out both; }
+.boot p { margin: 0; font-size: 15px; }
+.boot-logo, .splash .logo { width: 52px; height: 52px; border-radius: 14px; animation: boot-pulse 1.8s ease-in-out infinite; }
+.boot-logo svg, .splash .logo svg { width: 26px; height: 26px; }
+.boot-lines { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 10px; margin-top: 28px; text-align: left; }
+.skel { display: block; height: 14px; border-radius: 7px; background: linear-gradient(90deg, var(--card) 0%, color-mix(in srgb, var(--line) 75%, var(--card)) 50%, var(--card) 100%); background-size: 220% 100%; animation: shimmer 1.5s linear infinite; }
+.skel.user { align-self: flex-end; width: 52%; height: 40px; border-radius: 14px; margin-bottom: 8px; }
+.model-btn .skel { margin: 0 6px; }
+@keyframes shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+@keyframes boot-pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(.94); opacity: .75; } }
+@keyframes boot-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .skel, .boot-logo, .splash .logo, .boot { animation: none; } }
