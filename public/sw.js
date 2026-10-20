@@ -2,7 +2,7 @@
 // - Guarda el "shell" de la app para que abra al instante y funcione sin conexión (verás la interfaz y el aviso de que no hay red).
 // - Estrategia network-first: siempre intenta la red, así una actualización desde GitHub se ve en la siguiente carga.
 // - NUNCA toca /api: las respuestas autenticadas (proyectos, mensajes, eventos SSE) no se guardan en caché.
-const CACHE = 'occ-shell-v2';
+const CACHE = 'occ-shell-v3';
 const SHELL = [
   '/',
   '/app.css',
@@ -39,7 +39,7 @@ self.addEventListener('fetch', (event) => {
 
   const isNav = req.mode === 'navigate';
   event.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' }) // revalida siempre: ignora la caché HTTP del navegador
       .then((res) => {
         if (res.ok && res.type === 'basic') {
           const copy = res.clone();

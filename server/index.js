@@ -26,6 +26,7 @@ import * as users from './users.js';
 
 const fsp = fs.promises;
 
+const APP_VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(config.root, 'package.json'), 'utf8')).version; } catch { return '0'; } })();
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 'loopback');
@@ -67,6 +68,7 @@ if (config.multiuser && !config.instance) {
     let h = fs.readFileSync(path.join(config.root, 'public', 'index.html'), 'utf8');
     const scope = admin ? '/admin/' : `/u/${name}/`;
     h = h.replace('href="/manifest.webmanifest"', `href="${scope}manifest.webmanifest"`);
+    h = h.replace('src="/app.js"', `src="/app.js?v=${APP_VERSION}"`).replace('href="/app.css"', `href="/app.css?v=${APP_VERSION}"`);
     if (admin) h = h.replace('/icons/apple-touch-icon.png', '/icons/admin-apple-touch-icon.png').replace('<title>OpenCode Cloud</title>', '<title>OpenCode Admin</title>').replace('name="apple-mobile-web-app-title" content="OpenCode"', 'name="apple-mobile-web-app-title" content="Admin"').replace('name="application-name" content="OpenCode Cloud"', 'name="application-name" content="OpenCode Admin"');
     return h;
   };
@@ -98,6 +100,8 @@ app.use(
         if (file.endsWith('sw.js')) res.setHeader('Service-Worker-Allowed', '/');
       } else if (/[\\/]icons[\\/]/.test(file)) {
         res.setHeader('Cache-Control', 'public, max-age=86400');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache'); // app.js / app.css: siempre revalidar (si no, el iPhone puede seguir con la versión antigua)
       }
     },
   }),
