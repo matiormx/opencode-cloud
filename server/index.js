@@ -886,6 +886,18 @@ router.delete('/projects/:id/sessions/:sid/queue/:qid', wrap(async (req, res) =>
   queue.remove(p.id, sid(req), req.params.qid);
   res.json({ ok: true });
 }));
+router.patch('/projects/:id/sessions/:sid/queue/:qid', wrap(async (req, res) => {
+  const p = getProject(req);
+  if (!/^[a-f0-9]{1,32}$/.test(req.params.qid)) throw fail('Elemento no válido');
+  queue.update(p.id, sid(req), req.params.qid, req.body?.text);
+  res.json({ ok: true });
+}));
+router.put('/projects/:id/sessions/:sid/queue/order', wrap(async (req, res) => {
+  const p = getProject(req);
+  queue.reorder(p.id, sid(req), req.body?.ids);
+  res.json({ ok: true });
+}));
+router.post('/projects/:id/sessions/:sid/queue/pause', wrap(async (req, res) => { const p = getProject(req); queue.setPaused(p.id, sid(req), true); res.json({ ok: true }); }));
 router.delete('/projects/:id/sessions/:sid/queue', wrap(async (req, res) => { const p = getProject(req); queue.clear(p.id, sid(req)); res.json({ ok: true }); }));
 router.post('/projects/:id/sessions/:sid/queue/resume', wrap(async (req, res) => { const p = getProject(req); queue.setPaused(p.id, sid(req), false); res.json({ ok: true }); }));
 router.get('/projects/:id/permissions', ocRoute((dir) => oc.json('GET', '/permission', { directory: dir })));

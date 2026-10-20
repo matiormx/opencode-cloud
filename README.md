@@ -85,7 +85,7 @@ El instalador se puede volver a ejecutar sin riesgo: actualiza el código, conse
 
 ### Cola de mensajes
 
-Mientras OpenCode trabaja, el botón de enviar pasa a **Añadir a la cola** en cuanto escribes algo (y vuelve a ser **Detener** con el campo vacío). Los mensajes en espera aparecen encima del cuadro de texto: quita uno con la ✕ o usa **Vaciar**. Al pulsar **Detener** la cola se pone **en pausa** para que no arranque sola otra tarea; usa **Reanudar** para continuar. Máximo 20 mensajes por conversación.
+Mientras OpenCode trabaja, el botón de enviar pasa a **Añadir a la cola** en cuanto escribes algo (y vuelve a ser **Detener** con el campo vacío). Los mensajes en espera aparecen encima del cuadro de texto: quita uno con la ✕ o usa **Vaciar**. Al pulsar **Detener** la cola se pone **en pausa** para que no arranque sola otra tarea; usa **Reanudar** para continuar. Máximo 20 mensajes por conversación. Cada petición de la cola se puede **editar** (toca el texto) y **reordenar** (flechas ↑ ↓). **Pausar** guarda la cola sin enviar nada hasta que pulses **Reanudar**; mientras está en pausa, lo que escribas también se añade a la cola (para dejar peticiones preparadas para más tarde).
 
 ### Adjuntar archivos
 

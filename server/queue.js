@@ -48,7 +48,36 @@ export function add(projectId, sessionId, text, model) {
 export function remove(projectId, sessionId, id) {
   const before = data.items.length;
   data.items = data.items.filter((i) => !(i.id === id && i.projectId === projectId && i.sessionId === sessionId));
-  if (data.items.length !== before) persist();
+  if (data.items.length !== before) {
+    // sin peticiones guardadas, la pausa no tiene sentido (y lo nuevo que escribas se enviaría a una cola invisible)
+    if (!list(projectId, sessionId).items.length) delete data.paused[keyOf(projectId, sessionId)];
+    persist();
+  }
+}
+
+// Edita el texto de una petición que sigue en la cola
+export function update(projectId, sessionId, id, text) {
+  text = String(text || '').trim();
+  if (!text) throw Object.assign(new Error('El mensaje no puede quedar vacío'), { status: 400 });
+  if (text.length > MAX_TEXT) throw Object.assign(new Error('Mensaje demasiado largo'), { status: 400 });
+  const item = data.items.find((i) => i.id === id && i.projectId === projectId && i.sessionId === sessionId);
+  if (!item) throw Object.assign(new Error('Esa petición ya se envió o no existe'), { status: 404 });
+  item.text = text;
+  persist();
+}
+
+// Reordena las peticiones de una conversación según la lista de ids (las que ya no estén —porque se enviaron— se ignoran;
+// las nuevas que no vengan en la lista quedan al final)
+export function reorder(projectId, sessionId, ids) {
+  if (!Array.isArray(ids)) throw Object.assign(new Error('Orden no válido'), { status: 400 });
+  const mine = data.items.filter((i) => i.projectId === projectId && i.sessionId === sessionId);
+  const byId = new Map(mine.map((i) => [i.id, i]));
+  const ordered = [];
+  for (const id of ids) { const it = byId.get(String(id)); if (it && !ordered.includes(it)) ordered.push(it); }
+  for (const it of mine) if (!ordered.includes(it)) ordered.push(it);
+  let n = 0;
+  data.items = data.items.map((i) => (i.projectId === projectId && i.sessionId === sessionId ? ordered[n++] : i));
+  persist();
 }
 
 export function clear(projectId, sessionId) {

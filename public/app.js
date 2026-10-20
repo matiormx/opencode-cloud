@@ -5,6 +5,9 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const ico = (d, extra = '') => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
 const I = {
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  edit: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14 7l3 3"/>',
+  pause: '<path d="M8 5v14M16 5v14"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   download: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
   code: '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/>',
@@ -1084,8 +1087,42 @@ function renderQueue() {
   const { items, paused } = state.queue;
   box.classList.toggle('hidden', !items.length);
   if (!items.length) { box.innerHTML = ''; return; }
-  box.innerHTML = `<div class="queue-head"><strong>En cola (${items.length})</strong>${paused ? '<span class="queue-paused">en pausa</span>' : ''}<span class="grow"></span>${paused ? '<button class="btn small" data-act="queue-resume">Reanudar</button>' : ''}<button class="btn small ghost" data-act="queue-clear">Vaciar</button></div>` +
-    items.map((i, n) => `<div class="queue-item"><span class="queue-n">${n + 1}</span><span class="queue-text">${esc(i.text.length > 160 ? `${i.text.slice(0, 160)}…` : i.text)}</span><button class="icon-btn" data-act="queue-del" data-id="${esc(i.id)}" aria-label="Quitar de la cola">${ico(I.x, 'width="16" height="16"')}</button></div>`).join('');
+  const ib = (act, icon, label, extra = '') => `<button class="icon-btn q-ic" data-act="${act}" ${extra} aria-label="${label}" title="${label}">${ico(icon, 'width="16" height="16"')}</button>`;
+  box.innerHTML = `<div class="queue-head"><strong>En cola (${items.length})</strong>${paused ? '<span class="queue-paused">en pausa</span>' : ''}<span class="grow"></span>${paused
+    ? '<button class="btn small primary" data-act="queue-resume">Reanudar</button>'
+    : `<button class="btn small" data-act="queue-pause" title="Guarda la cola sin enviar nada hasta que la reanudes">${ico(I.pause, 'width="14" height="14"')} Pausar</button>`}<button class="btn small ghost" data-act="queue-clear">Vaciar</button></div>` +
+    (paused ? '<div class="queue-note">Guardadas: no se enviarán hasta que pulses Reanudar.</div>' : '') +
+    items.map((i, n) => `<div class="queue-item"><span class="queue-n">${n + 1}</span><button type="button" class="queue-text" data-act="queue-edit" data-id="${esc(i.id)}" title="Toca para editar">${esc(i.text.length > 160 ? `${i.text.slice(0, 160)}…` : i.text)}</button>`
+      + ib('queue-up', I.up, 'Subir', `data-id="${esc(i.id)}"${n === 0 ? ' disabled' : ''}`) + ib('queue-down', I.down, 'Bajar', `data-id="${esc(i.id)}"${n === items.length - 1 ? ' disabled' : ''}`)
+      + ib('queue-del', I.x, 'Quitar de la cola', `data-id="${esc(i.id)}"`) + '</div>').join('');
+}
+
+async function queueMove(id, dir) {
+  const ids = state.queue.items.map((i) => i.id);
+  const n = ids.indexOf(id);
+  const m = n + dir;
+  if (n < 0 || m < 0 || m >= ids.length) return;
+  [ids[n], ids[m]] = [ids[m], ids[n]];
+  state.queue.items = ids.map((x) => state.queue.items.find((i) => i.id === x)); // se ve al instante
+  renderQueue();
+  try { await api('PUT', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/order`, { ids }); } catch (e) { toast(e.message, 'err'); }
+  await loadQueue();
+}
+
+function queueEditModal(id) {
+  const it = state.queue.items.find((i) => i.id === id);
+  if (!it) return;
+  const pid = state.project.id; const sid = state.sessionId;
+  const m = openModal('Editar petición', `<div class="field"><textarea id="qe-text" rows="8" maxlength="20000" autocomplete="off" autocapitalize="sentences" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">${esc(it.text)}</textarea></div>
+    <p class="muted" style="font-size:12.5px;margin:0 0 10px">Si OpenCode la envía mientras editas, el cambio ya no se aplica.</p>
+    <div class="row wrap"><button class="btn primary grow" id="qe-save" type="button">Guardar</button></div>`);
+  $('#qe-save', m.el).addEventListener('click', async (e) => {
+    try {
+      await busyBtn(e.currentTarget, 'Guardando…', () => api('PATCH', `/api/projects/${pid}/sessions/${sid}/queue/${id}`, { text: $('#qe-text', m.el).value }));
+      m.close(); await loadQueue();
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  setTimeout(() => $('#qe-text', m.el)?.focus(), 80);
 }
 
 function setBusy(v) {
@@ -1651,10 +1688,10 @@ function updateSendButton() {
   const stop = state.busy && !typed;
   b.classList.toggle('stop', stop);
   b.innerHTML = ico(stop ? I.stop : I.send);
-  b.setAttribute('aria-label', stop ? 'Detener' : state.busy ? 'Añadir a la cola' : 'Enviar');
+  b.setAttribute('aria-label', stop ? 'Detener' : state.busy || state.queue.paused ? 'Añadir a la cola' : 'Enviar');
   b.title = state.busy && typed ? 'Se enviará cuando OpenCode termine' : '';
   const inp = $('#input');
-  if (inp) inp.placeholder = state.busy ? 'Trabajando… escribe para añadir a la cola' : 'Pide algo a OpenCode…';
+  if (inp) inp.placeholder = state.busy ? 'Trabajando… escribe para añadir a la cola' : state.queue.paused ? 'Cola en pausa: lo que escribas se guarda para más tarde' : 'Pide algo a OpenCode…';
   b.disabled = !state.project;
 }
 
@@ -1700,11 +1737,12 @@ async function submitInput() {
   const files = state.files.filter((f) => f.pid === state.project?.id);
   if ((!text.trim() && !state.attach.length && !files.length) || !state.project) return;
   if (files.some((f) => f.uploading)) { toast('Espera a que terminen de subirse los archivos', 'err'); return; }
-  if (state.busy && state.attach.length) { toast('Las imágenes solo se pueden enviar cuando OpenCode no está trabajando. Espera a que termine o quítalas.', 'err'); return; }
+  const toQueue = state.busy || state.queue.paused; // con la cola en pausa, lo nuevo se guarda para más tarde
+  if (toQueue && state.attach.length) { toast(state.busy ? 'Las imágenes solo se pueden enviar cuando OpenCode no está trabajando. Espera a que termine o quítalas.' : 'Las imágenes no se pueden guardar en la cola. Reanuda la cola o quítalas.', 'err'); return; }
   const note = filesNote(files);
   const full = [text.trim(), note].filter(Boolean).join('\n\n');
-  if (state.busy) {
-    // OpenCode está ocupado: el mensaje espera en la cola del servidor
+  if (toQueue) {
+    // OpenCode está ocupado (o la cola está en pausa): el mensaje espera en la cola del servidor
     const [providerID, modelID] = (state.model || '').split('::');
     try {
       await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue`, { text: full, model: providerID && modelID ? { providerID, modelID } : undefined });
@@ -2955,6 +2993,10 @@ function bindShell() {
         case 'context': contextModal(); break;
         case 'queue-del': await api('DELETE', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/${t.dataset.id}`); await loadQueue(); break;
         case 'queue-clear': await api('DELETE', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue`); await loadQueue(); break;
+        case 'queue-pause': await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/pause`, {}); toast('Cola en pausa: guardada para más tarde'); await loadQueue(); break;
+        case 'queue-up': await queueMove(t.dataset.id, -1); break;
+        case 'queue-down': await queueMove(t.dataset.id, 1); break;
+        case 'queue-edit': queueEditModal(t.dataset.id); break;
         case 'queue-resume': await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/resume`, {}); await loadQueue(); break;
         case 'install-app': await installApp(); break;
         case 'select-project': if (state.project?.id !== t.dataset.id) await selectProject(t.dataset.id); break;
