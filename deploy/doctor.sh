@@ -39,10 +39,10 @@ sec "Usuario y archivos"
 if id "$APP_USER" >/dev/null 2>&1; then ok "Usuario '$APP_USER' existe"; else bad "Falta el usuario '$APP_USER'"; fi
 [ -d "$APP_DIR" ] && ok "Aplicación en $APP_DIR" || bad "No existe $APP_DIR"
 [ -r "$ENV_FILE" ] && ok "Configuración $ENV_FILE" || bad "Falta $ENV_FILE"
-strange=""; id "$APP_USER" >/dev/null 2>&1 && strange="$(find "$APP_DIR" "$DATA_DIR" -xdev ! -user "$APP_USER" -not -path '*/node_modules/.cache/*' 2>/dev/null | head -n 5)"
+strange=""; id "$APP_USER" >/dev/null 2>&1 && strange="$(find "$APP_DIR" "$DATA_DIR" -xdev ! -user "$APP_USER" -not -path '*/node_modules/.cache/*' -not -path "$DATA_DIR/*-status*" -not -path "$DATA_DIR/instance-keys*" 2>/dev/null | head -n 5)"
 if [ -n "$strange" ]; then
   bad "Hay archivos que no son de '$APP_USER' (típico tras editar como root):"; echo "$strange" | sed 's/^/        /'
-  hint "Arréglalo con: sudo chown -R $APP_USER:$APP_USER $APP_DIR $DATA_DIR"
+  hint "Arréglalo con: sudo chown -R $APP_USER:$APP_USER $APP_DIR   (nunca sobre $DATA_DIR: las carpetas *-status e instance-keys son de root a propósito)"
 elif id "$APP_USER" >/dev/null 2>&1; then ok "Los archivos pertenecen a '$APP_USER'"; fi
 
 sec "Código de la aplicación"
