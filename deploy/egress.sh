@@ -198,6 +198,13 @@ restart_app() {
     log "Reiniciando $SERVICE para que use la nueva salida"
     systemctl restart "$SERVICE"
   fi
+  # Modo multiusuario: OpenCode corre en el espacio de cada usuario; también hay que reiniciarlos
+  if [ "$DRY" != 1 ]; then
+    local u
+    for u in $(systemctl list-units --plain --no-legend --state=active 'opencode-cloud-user@*' 2>/dev/null | awk '{print $1}'); do
+      log "Reiniciando $u"; systemctl restart "$u" || true
+    done
+  fi
 }
 
 ensure_wg() {

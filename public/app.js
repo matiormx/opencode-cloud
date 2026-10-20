@@ -2136,6 +2136,7 @@ async function settingsModal(section, { admin = false } = {}) {
       </div>
       ${warn}
       <div id="user-list" style="margin-bottom:12px">${rows}</div>
+      <div class="row wrap" style="margin-bottom:12px"><button class="btn small" id="spaces-restart-us" type="button">Reiniciar todos los espacios</button></div>
       <details class="nu-box" id="nu-box"><summary>+ Nuevo usuario</summary>
         <div class="stack" style="margin-top:10px">
           <input id="nu-name" type="text" placeholder="Usuario (minúsculas y números)" maxlength="20" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
@@ -2234,6 +2235,7 @@ async function settingsModal(section, { admin = false } = {}) {
     <div class="tabpane" data-pane="red"${curView === 'red' ? '' : ' hidden'}>
     <h3 id="sec-egress" class="t-dup">Salida a internet (WireGuard)</h3>
     <div id="eg-block">${egressBlock()}</div>
+    ${admin ? `<h3>Aplicar la nueva salida</h3><p class="muted" style="margin-top:0">Las conexiones que ya estaban abiertas siguen por la ruta antigua: reinicia los espacios para que todo salga por el túnel.</p><div class="row wrap"><button class="btn" id="spaces-restart-eg" type="button">Reiniciar espacios</button></div>` : ''}
     </div>` : ''}
 
     ${admin ? `<div class="tabpane" data-pane="oc"${curView === 'oc' ? '' : ' hidden'}>
@@ -2282,17 +2284,24 @@ async function settingsModal(section, { admin = false } = {}) {
   }
 
   const egRefresh = async () => { eg = await api('GET', '/api/egress?force=1').catch(() => eg); $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); };
+  // En el panel no hay OpenCode propio: lo que se reinicia son los espacios de los usuarios
+  const spacesRestart = async (question) => {
+    if (!(await confirmInterrupt(question || 'Se reiniciarán los espacios de todos los usuarios; lo que estén haciendo se interrumpe y no se reanuda solo. ¿Reiniciar ahora?'))) return false;
+    await api('POST', '/api/users/restart-all'); toast('Espacios reiniciados'); return true;
+  };
   const egAfter = async (r, okMsg) => {
     eg = { ...eg, ...r };
     $('#eg-block', m.el).innerHTML = egressBlock(); egBind();
     if (!r.ok) { toast(r.message || 'No se pudo aplicar', 'err'); return; }
     toast(r.message || okMsg);
-    if (await confirmInterrupt('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?')) {
+    if (admin) await spacesRestart('Para que los espacios usen la nueva salida hay que reiniciarlos (lo que estén haciendo se interrumpe). ¿Reiniciar ahora?');
+    else if (await confirmInterrupt('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?')) {
       await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); await loadModels(); renderModels();
     }
     egRefresh();
   };
   const egBind = () => {
+    click('#spaces-restart-eg', async (b) => { await busyBtn(b, 'Reiniciando…', () => spacesRestart()); });
     click('#eg-recheck', async (b) => { await busyBtn(b, 'Comprobando…', egRefresh); if (!eg?.helper) toast('Todavía no se detecta el ayudante', 'err'); });
     q('#eg-file')?.addEventListener('change', async (e) => {
       const f = e.target.files?.[0]; if (!f) return;
@@ -2310,10 +2319,11 @@ async function settingsModal(section, { admin = false } = {}) {
     q('#eg-conf')?.addEventListener('input', (e) => { egDraft = e.target.value; });
     click('#eg-reconnect', async (b) => { const r = await busyBtn(b, 'Reconectando…', () => api('POST', '/api/egress/action', { action: 'reconnect' })); eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message || 'Hecho', r.ok ? undefined : 'err'); egRefresh(); });
     click('#eg-on', async (b) => egAfter(await busyBtn(b, 'Activando…', () => api('POST', '/api/egress/action', { action: 'on' })), 'Túnel activado'));
-    click('#eg-off', async (b) => { if (!(await confirmInterrupt('Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
+    click('#eg-off', async (b) => { if (!(await confirmInterrupt(admin ? 'Se desactivará el túnel y se reiniciarán los espacios de los usuarios. ¿Continuar?' : 'Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
       const r = await busyBtn(b, 'Desactivando…', () => api('POST', '/api/egress/action', { action: 'off' }));
       eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message);
-      await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); egRefresh(); });
+      if (admin) await api('POST', '/api/users/restart-all'); else await api('POST', '/api/opencode/restart');
+      toast(admin ? 'Espacios reiniciados' : 'OpenCode reiniciado'); egRefresh(); });
     click('#eg-remove', async (b) => { if (!confirm('¿Quitar la configuración de WireGuard del VPS?')) return;
       const r = await busyBtn(b, 'Quitando…', () => api('POST', '/api/egress/action', { action: 'remove' }));
       eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message); egRefresh(); });
@@ -2377,6 +2387,7 @@ async function settingsModal(section, { admin = false } = {}) {
   const usersBind = () => {
     q('#nu-gen')?.addEventListener('click', () => { q('#nu-pass').value = genPass(); });
     click('#users-refresh', async (b) => { await busyBtn(b, 'Comprobando…', usersRefresh); });
+    click('#spaces-restart-us', async (b) => { await busyBtn(b, 'Reiniciando…', () => spacesRestart()); usersRefresh(); });
     click('#nu-create', async (b) => {
       const name = q('#nu-name').value.trim().toLowerCase(); const password = q('#nu-pass').value;
       await busyBtn(b, 'Creando… (unos segundos)', () => api('POST', '/api/users', { name, password }));

@@ -338,6 +338,16 @@ router.put(
 );
 
 // --- Usuarios (solo administrador, modo multiusuario) ---
+// Reinicia el espacio de todos los usuarios (p. ej. para que usen una nueva salida WireGuard)
+router.post(
+  '/users/restart-all',
+  multiOnly,
+  adminOnly,
+  wrap(async (req, res) => {
+    await instances.request('restart-all');
+    res.json({ ok: true });
+  }),
+);
 // El administrador puede entrar en el espacio de un usuario sin su contraseña (sesión de trabajo corta, queda en el registro)
 router.post(
   '/users/:name/enter',
