@@ -27,25 +27,26 @@ export function proxy(req, res, next) {
   const info = auth.sessionInfo(req);
   if (!info) return next(); // sin sesión: lo resuelve requireAuth
   const admin = info.user === '';
-  const name = admin ? users.ownerName() : info.user;
   if (req.adminCtx) {
     // Panel de administración: solo el administrador, y solo lo suyo (nada de proyectos ni del agente)
     if (!admin) return res.status(401).json({ error: 'No autenticado' });
     if (LOCAL.has(req.path)) return next();
-    if (req.path === '/activity' && req.method === 'GET') return adminActivity(req, res, name);
+    if (req.path === '/activity' && req.method === 'GET') return adminActivity(req, res);
     return isAdminLocal(req.path) ? next() : res.status(404).json({ error: 'No encontrado' });
   }
-  if (admin && isAdminOnly(req.path)) return res.status(403).json({ error: 'Eso se gestiona desde el panel de administración (/admin/)' });
-  if (!admin && !users.isActive(name)) {
+  // El administrador no trabaja: no tiene espacio. En la API de trabajo solo hay sesiones de usuarios.
+  if (admin) return res.status(401).json({ error: 'No autenticado' });
+  const name = info.user;
+  if (!users.isActive(name)) {
     auth.dropSessions(name);
     return res.status(401).json({ error: 'No autenticado' });
   }
   if (LOCAL.has(req.path)) return next();
-  if (!admin && req.path.startsWith('/users')) return res.status(403).json({ error: 'Solo el administrador puede gestionar usuarios' });
+  if (isAdminOnly(req.path)) return res.status(403).json({ error: 'Solo el administrador puede hacer eso (desde /admin/)' });
 
   seen.set(name, Date.now());
   const k = instances.keys(name);
-  if (!k) return res.status(503).json({ error: admin ? 'Tu espacio todavía no está preparado. En el VPS: sudo /opt/opencode-cloud/deploy/multiuser.sh setup' : 'Tu espacio todavía no está preparado. Pide al administrador que lo revise.' });
+  if (!k) return res.status(503).json({ error: 'Tu espacio todavía no está preparado. Pide al administrador que lo revise.' });
 
   const headers = {};
   for (const [h, v] of Object.entries(req.headers)) {
@@ -54,7 +55,6 @@ export function proxy(req, res, next) {
   }
   headers['x-oc-gateway'] = k.secret;
   headers['x-oc-user'] = name;
-  if (admin) headers['x-oc-admin-url'] = '/admin/';
   headers['x-forwarded-for'] = req.ip;
   if (req.headers['content-length']) headers['content-length'] = req.headers['content-length'];
   if (req.headers['transfer-encoding']) headers['transfer-encoding'] = req.headers['transfer-encoding'];
@@ -75,20 +75,9 @@ export function proxy(req, res, next) {
   req.pipe(up);
 }
 
-// Actividad del administrador: la de su propio espacio más la de los espacios de los demás (que solo conoce la pasarela)
-function adminActivity(req, res, name) {
-  const k = instances.keys(name);
-  const done = (own) => {
-    Promise.all(users.list().filter((u) => u.role !== 'admin' && !u.disabled).map(async (u) => ({ name: u.name, ...((await instances.activity(u.name)) || {}) })))
-      .then((rows) => res.json({ busy: [], sessions: [], queued: 0, requests: null, ...own, others: rows.filter((r) => r.busy || r.queued) }))
-      .catch(() => res.json({ busy: [], sessions: [], queued: 0, requests: null, ...own, others: [] }));
-  };
-  if (!k) return done({});
-  const rq = http.request({ host: '127.0.0.1', port: k.port, path: '/api/activity', method: 'GET', timeout: 8000, headers: { 'x-oc-gateway': k.secret, 'x-oc-user': name } }, (r) => {
-    let b = ''; r.setEncoding('utf8'); r.on('data', (d) => { if (b.length < 2_000_000) b += d; });
-    r.on('end', () => { let j = {}; try { j = JSON.parse(b); } catch { /* sin datos */ } done(r.statusCode === 200 && j && typeof j === 'object' ? j : {}); });
-  });
-  rq.on('timeout', () => rq.destroy());
-  rq.on('error', () => { instances.nudge(name); done({}); });
-  rq.end();
+// Actividad para el administrador: la de los espacios de los usuarios (él no tiene espacio propio)
+function adminActivity(req, res) {
+  Promise.all(users.list().filter((u) => u.role !== 'admin' && !u.disabled).map(async (u) => ({ name: u.name, ...((await instances.activity(u.name)) || {}) })))
+    .then((rows) => res.json({ busy: [], sessions: [], queued: 0, requests: null, others: rows.filter((r) => r.busy || r.queued) }))
+    .catch(() => res.json({ busy: [], sessions: [], queued: 0, requests: null, others: [] }));
 }

@@ -187,11 +187,11 @@ Requiere `opencode` en el PATH (o `OPENCODE_BIN=/ruta/a/opencode`) y Node ≥ 20
 
 ## Aislamiento y varios usuarios
 
-Desde la v0.17.0 el instalador deja el modo aislado activado de fábrica. La app que sirve la WebUI (`occloud`) es solo la **pasarela**: login, usuarios, actualizaciones, red y recursos. **No ejecuta al agente ni ve los proyectos.** El agente y los proyectos corren siempre en un **espacio propio** (usuario de Linux `ocu-<nombre>`, OpenCode propio, claves de API y token de GitHub propios), también el del administrador. Un espacio no puede leer los archivos, claves ni procesos de otro, ni los de la pasarela (contraseñas, lista de usuarios).
+Desde la v0.17.0 el instalador deja el modo aislado activado de fábrica. La app que sirve la WebUI (`occloud`) es solo la **pasarela**: login, usuarios, actualizaciones, red y recursos. **No ejecuta al agente ni ve los proyectos.** El agente y los proyectos corren siempre en un **espacio propio** (usuario de Linux `ocu-<nombre>`, OpenCode propio, claves de API y token de GitHub propios), y el administrador **no trabaja**: solo administra, sin espacio ni proyectos. Un espacio no puede leer los archivos, claves ni procesos de otro, ni los de la pasarela (contraseñas, lista de usuarios).
 
 - En **Ajustes → Usuarios** (solo el administrador) creas usuarios con su contraseña, la cambias, los desactivas, reinicias su espacio o los eliminas (archivando o borrando sus archivos). No hay registro libre.
 - Cada usuario gestiona sus propias claves y su token de GitHub. Las actualizaciones de la app, la salida WireGuard y la actualización de OpenCode las gestiona el administrador.
-- El administrador entra con su usuario (por defecto `admin`) y su contraseña, y trabaja en su espacio como cualquier otro.
+- El administrador (usuario `admin`) solo administra desde `/admin/`: usuarios, red, actualizaciones y OpenCode. Para trabajar tiene que crearse un usuario normal, como cualquier otra persona.
 
 ### Rutas: puerta, panel y espacios
 
@@ -199,8 +199,8 @@ Un solo dominio, tres tipos de ruta:
 
 | Ruta | Qué es |
 |---|---|
-| `/` | La puerta: login (usuario y contraseña) y reparto. Un usuario va directo a `/u/<usuario>/`; el administrador elige entre **Trabajar** y **Administración**. |
-| `/u/<usuario>/` | El espacio de trabajo de cada uno (el administrador también tiene el suyo, `/u/admin/`). |
+| `/` | La puerta: login (usuario y contraseña). Un usuario va directo a `/u/<usuario>/`; `admin` va directo a `/admin/`. Solo si el navegador tiene abiertas **a la vez** la sesión de un usuario y la del administrador, pregunta «Trabajar o Administración». |
+| `/u/<usuario>/` | El espacio de trabajo de cada usuario. |
 | `/admin/` | El panel de administración: usuarios, salida a internet, actualizaciones, OpenCode y recursos. Solo entra el administrador (solo pide contraseña). No carga proyectos ni el agente. |
 
 Cada ruta se instala como **su propia app/PWA** (manifest con `id` y ámbito propios; el panel con otro nombre, «OpenCode Admin», y otro icono, azul). Si una app se abre en `/` o en la ruta de otro, la puerta la lleva a la suya. El panel usa su propia API (`/admin/api/…`) y las acciones de administración se rechazan en la API de trabajo (`/api/…`) aunque seas administrador, así se pueden proteger solo `/admin*` con Cloudflare Access o un firewall. Todo comparte origen (cookies y almacenamiento del navegador): quien tenga un XSS en la app podría alcanzar la sesión de administrador del mismo navegador; la CSP estricta y servir los archivos del agente en sandbox lo mitigan.
@@ -213,7 +213,7 @@ Detalles:
 - **Memoria:** cada espacio ejecuta su propia app y su OpenCode (del orden de 150-300 MB por usuario activo).
 - **Actualizaciones:** al actualizar desde la WebUI, todos los espacios se reinician con la versión nueva. Si cambia `deploy/multiuser.sh`, vuelve a ejecutar `sudo deploy/multiuser.sh setup` (la WebUI avisa). «Actualizar OpenCode» usa el ayudante (`multiuser.sh upgrade-opencode`) y reinicia todos los espacios.
 - **Repositorio privado:** el token con el que la pasarela se actualiza es el de la instalación (`GITHUB_TOKEN` del instalador); el que pones en Ajustes es el de tu espacio.
-- **Instalaciones anteriores (v0.16 o menos):** `sudo /opt/opencode-cloud/deploy/multiuser.sh setup` activa el modo y crea el espacio del administrador, pero los proyectos antiguos (de `occloud`) no se mueven solos: vuelve a clonarlos desde GitHub. Lo más limpio es reinstalar.
+- **Instalaciones anteriores (v0.16 o menos):** `sudo /opt/opencode-cloud/deploy/multiuser.sh setup` activa el modo, pero los proyectos antiguos (de `occloud`) no se mueven solos: vuelve a clonarlos desde GitHub. Lo más limpio es reinstalar.
 - **WireGuard:** el rango de uids de los usuarios también sale por el túnel; si ya lo tenías configurado, vuelve a ejecutar `egress.sh setup` y guarda la configuración otra vez.
 - **Volver atrás:** `sudo deploy/multiuser.sh disable` quita `MULTIUSER` (la app vuelve a ejecutar al agente ella misma, sin aislamiento); los espacios se conservan y `multiuser.sh status` los lista.
 

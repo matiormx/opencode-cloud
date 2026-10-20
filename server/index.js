@@ -133,15 +133,17 @@ app.post(
       throw fail(config.multiuser ? 'Usuario o contraseña incorrectos' : 'Contraseña incorrecta', 401);
     }
     keys.forEach((k) => auth.clearFailures(k));
-    auth.setCookie(res, auth.createSession(user.role === 'admin' ? '' : user.name));
-    if (config.multiuser) instances.probe(user.name).then((up) => { if (!up) instances.nudge(user.name); });
+    // En modo multiusuario el administrador solo administra: entre por donde entre, su sesión es la del panel (/admin/)
+    const kind = config.multiuser && user.role === 'admin' ? 'admin' : auth.sessionKind(req);
+    auth.setCookie(res, auth.createSession(user.role === 'admin' ? '' : user.name, kind), kind);
+    if (config.multiuser && user.role !== 'admin') instances.probe(user.name).then((up) => { if (!up) instances.nudge(user.name); });
     res.json({ ok: true, user });
   }),
 );
 
 app.post('/api/logout', (req, res) => {
   auth.destroySession(req);
-  auth.clearCookie(res);
+  auth.clearCookie(res, auth.sessionKind(req));
   res.json({ ok: true });
 });
 
@@ -325,12 +327,12 @@ router.put(
     if (req.sessionUser) {
       // Usuario no administrador: su contraseña vive en la pasarela
       await users.changeOwnPassword(req.sessionUser, current, next);
-      auth.setCookie(res, auth.createSession(req.sessionUser));
+      auth.setCookie(res, auth.createSession(req.sessionUser, auth.sessionKind(req)), auth.sessionKind(req));
       return res.json({ ok: true });
     }
     if (!(await auth.verifyPassword(current))) throw fail('La contraseña actual no es correcta', 403);
     await auth.setPassword(next);
-    auth.setCookie(res, auth.createSession(''));
+    auth.setCookie(res, auth.createSession('', auth.sessionKind(req)), auth.sessionKind(req));
     res.json({ ok: true });
   }),
 );

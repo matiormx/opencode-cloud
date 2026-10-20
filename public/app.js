@@ -339,6 +339,8 @@ function showLogin() {
       const r = await busyBtn(btn, 'Entrando…', () => api('POST', '/api/login', body));
       state.me = r.user || null;
       if (multi) { try { localStorage.setItem('lastUser', body.username); } catch { /* sin almacenamiento */ } }
+      // El administrador solo administra: su sesión es la del panel
+      if (state.multiuser && r.user?.role === 'admin' && state.route?.kind !== 'admin') return location.replace('/admin/');
       await enter();
     } catch (err) {
       toast(err.message, 'err');
@@ -358,13 +360,22 @@ function parseRoute() {
 const homeOf = (u) => `/u/${u.name}/`;
 
 // Qué mostrar según la ruta y la sesión actual
+// El panel tiene su propia sesión (otra cookie y otra contraseña): desde la raíz se pregunta si hay una abierta
+async function adminSession() {
+  try {
+    const r = await fetch('/admin/api/me', { headers: { 'X-Requested-With': 'occloud' } });
+    return Boolean((await r.json()).authenticated);
+  } catch { return false; }
+}
+
 async function enter() {
   const r = state.route || { kind: 'root' }, u = state.me;
   if (!state.multiuser) return r.kind === 'root' ? mountApp() : location.replace('/');
   if (!u) return showLogin();
   if (r.kind === 'admin') return u.role === 'admin' ? mountAdmin() : showLogin();
   if (r.kind === 'user') return u.name === r.name ? mountApp() : location.replace(homeOf(u));
-  if (u.role === 'admin') return showPortal(u);
+  // Raíz: con una sola sesión abierta se va directo a su sitio; solo si hay la de un usuario Y la del administrador se pregunta
+  if (await adminSession()) return showPortal(u);
   location.replace(homeOf(u));
 }
 
@@ -376,11 +387,15 @@ function showPortal(u) {
       <div class="logo">${ico(I.code, 'stroke="#fff" stroke-width="2.4"')}</div>
       <h1>Hola, ${esc(u.name)}</h1>
       <p class="muted" style="margin:0 0 20px">¿A dónde quieres ir?</p>
-      <a class="btn primary" style="width:100%;margin-bottom:10px" href="${esc(homeOf(u))}">Trabajar</a>
+      <a class="btn primary" style="width:100%;margin-bottom:10px" href="${esc(homeOf(u))}">Trabajar (${esc(u.name)})</a>
       <a class="btn" style="width:100%;margin-bottom:10px" href="/admin/">Administración</a>
       <button class="btn ghost" style="width:100%" type="button" id="portal-out">Cerrar sesión</button>
     </div></div>`;
-  $('#portal-out').addEventListener('click', async () => { try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ } state.me = null; showLogin(); });
+  $('#portal-out').addEventListener('click', async () => {
+    try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ }
+    try { await fetch('/admin/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'occloud' } }); } catch { /* sin sesión de panel */ }
+    state.me = null; showLogin();
+  });
 }
 
 /* ============================== Estructura ============================== */
@@ -2932,6 +2947,7 @@ tuneAll(document.body);
     state.me = me.user || null;
     if (state.adminHost) document.title = 'OpenCode Admin';
     if (me.authenticated) await enter();
+    else if (state.multiuser && state.route.kind === 'root' && (await adminSession())) location.replace('/admin/'); // solo hay sesión del panel
     else showLogin();
   } catch {
     showLogin();

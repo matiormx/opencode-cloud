@@ -376,5 +376,5 @@ else
   echo "  Contraseña:  la que ya tenías configurada (cámbiala con: sudo -u $APP_USER DATA_DIR=$DATA_DIR node $APP_DIR/bin/set-password.js 'nueva')"
 fi
 echo "  Servicio:    systemctl status $SERVICE   ·   journalctl -u $SERVICE -f"
-echo "  Rutas:       entra por la raíz (usuario y contraseña); el administrador elige entre Trabajar (/u/admin/) y Administración (/admin/)."
-echo "  Siguiente:   entra, abre Ajustes y añade tu token de GitHub y la API key de tu proveedor de IA."
+echo "  Rutas:       «admin» entra en /admin/ y solo administra; crea ahí tu usuario para trabajar (entra por la raíz)."
+echo "  Siguiente:   en /admin/ → Usuarios crea tu usuario; con él entra, abre Ajustes y añade tu token de GitHub y la API key."

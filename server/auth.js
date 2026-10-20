@@ -3,6 +3,10 @@ import { config } from './config.js';
 import * as store from './store.js';
 
 const COOKIE = 'occ_session';
+// La sesión del panel de administración (/admin/) es otra: su propia cookie, que solo viaja a /admin, y se pide la contraseña aparte.
+const ADMIN_COOKIE = 'occ_admin';
+const cookieOf = (kind) => (kind === 'admin' ? ADMIN_COOKIE : COOKIE);
+const kindOf = (req) => (req.adminCtx ? 'admin' : 'work');
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 const scrypt = (password, salt) =>
@@ -71,10 +75,10 @@ function pruneSessions(sessions) {
   return sessions;
 }
 
-export function createSession(user = '') {
+export function createSession(user = '', kind = 'work') {
   const token = crypto.randomBytes(32).toString('hex');
   const sessions = pruneSessions(store.load('sessions', {}));
-  sessions[sha256(token)] = { exp: Date.now() + config.sessionDays * 86400 * 1000, user };
+  sessions[sha256(token)] = { exp: Date.now() + config.sessionDays * 86400 * 1000, user, kind };
   store.save('sessions', sessions);
   return token;
 }
@@ -96,11 +100,13 @@ function parseCookies(header = '') {
 
 // Sesión válida de la petición: { user } ('' = administrador) o null
 export function sessionInfo(req) {
-  const token = parseCookies(req.headers.cookie)[COOKIE];
+  const kind = kindOf(req);
+  const token = parseCookies(req.headers.cookie)[cookieOf(kind)];
   if (!token) return null;
   const v = store.load('sessions', {})[sha256(token)];
   if (!v) return null;
   const s = norm(v);
+  if ((s.kind || 'work') !== kind) return null; // una cookie no vale para el otro tipo de sesión
   return s.exp > Date.now() ? { user: s.user } : null;
 }
 
@@ -119,23 +125,25 @@ export function isAuthenticated(req) {
 }
 
 export function destroySession(req) {
-  const token = parseCookies(req.headers.cookie)[COOKIE];
+  const token = parseCookies(req.headers.cookie)[cookieOf(kindOf(req))];
   if (!token) return;
   const sessions = store.load('sessions', {});
   delete sessions[sha256(token)];
   store.save('sessions', sessions);
 }
 
-export function setCookie(res, token) {
+export function setCookie(res, token, kind = 'work') {
   const maxAge = config.sessionDays * 86400;
-  const flags = ['HttpOnly', 'SameSite=Strict', 'Path=/', `Max-Age=${maxAge}`];
+  const flags = ['HttpOnly', 'SameSite=Strict', `Path=${kind === 'admin' ? '/admin' : '/'}`, `Max-Age=${maxAge}`];
   if (config.secureCookies) flags.push('Secure');
-  res.setHeader('Set-Cookie', `${COOKIE}=${token}; ${flags.join('; ')}`);
+  res.setHeader('Set-Cookie', `${cookieOf(kind)}=${token}; ${flags.join('; ')}`);
 }
 
-export function clearCookie(res) {
-  res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+export function clearCookie(res, kind = 'work') {
+  res.setHeader('Set-Cookie', `${cookieOf(kind)}=; HttpOnly; SameSite=Strict; Path=${kind === 'admin' ? '/admin' : '/'}; Max-Age=0`);
 }
+
+export const sessionKind = kindOf;
 
 // ---- Middlewares ----
 // Defensa CSRF adicional a SameSite: las peticiones que cambian estado deben llevar una cabecera propia.
