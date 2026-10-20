@@ -89,7 +89,7 @@ Mientras OpenCode trabaja, el botón de enviar pasa a **Añadir a la cola** en c
 
 ### Probar el proyecto sin GitHub: descargar y vista previa
 
-Menú del proyecto (los tres puntos junto a su nombre):
+Botones arriba, junto a Git (ojo = vista previa, flecha = descargar), y también en el menú del proyecto (los tres puntos junto a su nombre):
 
 - **Descargar proyecto (.zip):** todos los archivos, sin `node_modules`, `.git` ni enlaces simbólicos. Se genera al vuelo; el límite es 1,5 GB o 20 000 archivos.
 - **Vista previa:** ve dentro de la app lo que OpenCode está construyendo. Muestra los servidores web que haya arrancado en tu espacio (cualquier puerto, p. ej. `npm run dev`) y, si el proyecto tiene un `index.html`, también la carpeta servida tal cual. Pídele a OpenCode «arranca el proyecto para verlo».

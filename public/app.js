@@ -5,6 +5,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const ico = (d, extra = '') => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
 const I = {
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   download: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
   code: '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -942,6 +943,7 @@ function renderTopbar() {
     <button class="icon-btn menu-btn" data-act="toggle-nav" aria-label="Menú">${ico(I.menu)}</button>
     <h2 class="grow">${p ? esc(p.name) : 'OpenCode Cloud'}</h2>
     ${p && st ? `<span class="chip ${st.merging ? 'err' : ''}">${esc(st.branch || '—')}${st.ahead ? ` ↑${st.ahead}` : ''}${st.behind ? ` ↓${st.behind}` : ''}</span>` : ''}
+    ${p ? `<button class="icon-btn" data-act="preview" aria-label="Vista previa" title="Vista previa">${ico(I.eye, 'width="20" height="20"')}</button><a class="icon-btn" href="/api/projects/${esc(p.id)}/download" download aria-label="Descargar proyecto (.zip)" title="Descargar proyecto (.zip)">${ico(I.download, 'width="20" height="20"')}</a>` : ''}
     ${p ? `<button class="btn small" data-act="toggle-git" aria-label="Control de versiones">${ico(I.git, 'width="16" height="16"')}<span class="git-label">Git</span></button>` : ''}`;
 }
 
@@ -2918,6 +2920,7 @@ function bindShell() {
         case 'queue-resume': await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/resume`, {}); await loadQueue(); break;
         case 'install-app': await installApp(); break;
         case 'select-project': if (state.project?.id !== t.dataset.id) await selectProject(t.dataset.id); break;
+        case 'preview': if (state.project) previewModal(state.project.id); break;
         case 'project-menu': e.stopPropagation(); state.navOpen = false; applyPanelState(); projectMenuModal(t.dataset.id); break;
         case 'new-project': state.navOpen = false; applyPanelState(); newProjectModal(); break;
         case 'new-session': await newSession(); break;
