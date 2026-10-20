@@ -85,7 +85,8 @@ wait_health() { # puerto
 
 # Comprobaciones previas: si fallan, no se ha tocado nada (y por tanto no hay que deshacer nada)
 precheck_create() {
-  local name="$1" idx lname="ocu-$name"
+  local name="$1" idx lname
+  lname="ocu-$name"
   [ -z "$(idx_of "$name")" ] || { echo "Ese espacio ya existe"; return 1; }
   idx="$(next_idx)" || { echo "No quedan huecos para más usuarios"; return 1; }
   id "$lname" >/dev/null 2>&1 && { echo "Ya existe un usuario de Linux $lname"; return 1; }
@@ -133,7 +134,8 @@ EOF
 }
 
 do_delete() { # name purge(0|1)
-  local name="$1" purge="$2" lname="ocu-$name" dest
+  local name="$1" purge="$2" lname dest
+  lname="ocu-$name"
   sys systemctl disable --now "$(unit_of "$name")" >/dev/null 2>&1 || true
   [ "$DRY" = 1 ] || pkill -u "$lname" 2>/dev/null || true
   rm -f -- "$CONF_DIR/$name.env" "$KEYS/$name.json"
