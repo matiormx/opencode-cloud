@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # OpenCode Cloud — instala Chromium y Playwright MCP para todos los usuarios (extensión "Playwright").
 #
-# Instalación única del ayudante (como root). Después el botón «Instalar Chromium» de Ajustes → Extensiones hace el resto:
+# Instalación única del ayudante (como root). Después el botón «Instalar Chromium» del panel de administración (/admin/ → OpenCode → Navegador) hace el resto
+# (el instalador de OpenCode Cloud ya lo prepara; solo hace falta a mano en instalaciones antiguas):
 #   sudo /opt/opencode-cloud/deploy/browser.sh setup
 #
 # También se puede usar desde la terminal:
@@ -128,7 +129,7 @@ EOF
   systemctl daemon-reload
   systemctl enable --now opencode-browser.path >/dev/null
   if [ -f "$TOOLS_DIR/ready.json" ]; then write_status none ready "Chromium y Playwright MCP instalados"; else write_status none idle "Ayudante instalado"; fi
-  log "Listo. Abre Ajustes → Extensiones en la WebUI y pulsa «Instalar Chromium»."
+  log "Listo. Entra en el panel de administración (/admin/), abre OpenCode → Navegador y pulsa «Instalar Chromium»."
   log "(Si actualizas la aplicación y cambia este script, vuelve a ejecutar: sudo $0 setup)"
 }
 

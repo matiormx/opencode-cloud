@@ -2136,7 +2136,7 @@ async function settingsModal(section, { admin = false } = {}) {
       </div>
       ${warn}
       <div id="user-list" style="margin-bottom:12px">${rows}</div>
-      <div class="row wrap" style="margin-bottom:12px"><button class="btn small" id="spaces-restart-us" type="button">Reiniciar todos los espacios</button></div>
+      <div class="rs-slot" style="margin-bottom:12px"></div>
       <details class="nu-box" id="nu-box"><summary>+ Nuevo usuario</summary>
         <div class="stack" style="margin-top:10px">
           <input id="nu-name" type="text" placeholder="Usuario (minúsculas y números)" maxlength="20" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">
@@ -2235,12 +2235,15 @@ async function settingsModal(section, { admin = false } = {}) {
     <div class="tabpane" data-pane="red"${curView === 'red' ? '' : ' hidden'}>
     <h3 id="sec-egress" class="t-dup">Salida a internet (WireGuard)</h3>
     <div id="eg-block">${egressBlock()}</div>
-    ${admin ? `<h3>Aplicar la nueva salida</h3><p class="muted" style="margin-top:0">Las conexiones que ya estaban abiertas siguen por la ruta antigua: reinicia los espacios para que todo salga por el túnel.</p><div class="row wrap"><button class="btn" id="spaces-restart-eg" type="button">Reiniciar espacios</button></div>` : ''}
+    ${admin ? `<h3>Aplicar la nueva salida</h3><p class="muted" style="margin-top:0">Las conexiones que ya estaban abiertas siguen por la ruta antigua: reinicia los espacios para que todo salga por el túnel.</p><div class="rs-slot"></div>` : ''}
     </div>` : ''}
 
     ${admin ? `<div class="tabpane" data-pane="oc"${curView === 'oc' ? '' : ' hidden'}>
     <p class="muted" style="margin-top:0">OpenCode es el mismo programa para todos los espacios. Al actualizarlo se reinician todos (se avisa si alguien está trabajando).</p>
-    <div class="row wrap"><button class="btn" id="oc-upgrade">Actualizar OpenCode</button></div></div>` : ''}
+    <div class="row wrap"><button class="btn" id="oc-upgrade">Actualizar OpenCode</button></div>
+    <h3>Navegador para los usuarios (Chromium)</h3>
+    <p class="muted" style="margin-top:0">Lo usa la extensión Playwright, para que OpenCode abra páginas y haga capturas. Se instala una sola vez en el servidor y después cada usuario lo activa en su Ajustes → Extensiones.</p>
+    <div id="br-block"><p class="muted">Cargando…</p></div></div>` : ''}
 
     ${canAdmin ? `<div class="tabpane" data-pane="upd"${curView === 'upd' ? '' : ' hidden'}>
     <h3 id="sec-update" class="t-dup">Actualizaciones de esta aplicación</h3>
@@ -2289,19 +2292,89 @@ async function settingsModal(section, { admin = false } = {}) {
     if (!(await confirmInterrupt(question || 'Se reiniciarán los espacios de todos los usuarios; lo que estén haciendo se interrumpe y no se reanuda solo. ¿Reiniciar ahora?'))) return false;
     await api('POST', '/api/users/restart-all'); toast('Espacios reiniciados'); return true;
   };
+  // Reinicio de espacios: ahora (interrumpe lo que estén haciendo) o cuando todos estén libres (persistente en el servidor)
+  let rs = { pending: false, busy: [] };
+  let rsTimer = null;
+  const rsHtml = () => {
+    const names = (rs.busy || []).map((b) => `${esc(b.name)} (${b.busy || 0}${b.queued ? ` + ${b.queued} en cola` : ''})`).join(', ');
+    const wait = rs.pending
+      ? `<div class="banner" style="margin:0 0 10px"><strong>Reinicio en espera.</strong> Los espacios se reiniciarán solos cuando nadie esté trabajando${names ? ` (ahora trabajan: ${names})` : ''}.${rs.unknown ? ' Algún espacio no responde a la consulta; se reiniciará igualmente pasado el tiempo máximo.' : ''}<div class="row" style="margin-top:8px"><button class="btn small" type="button" data-rs="cancel">Cancelar la espera</button></div></div>`
+      : '';
+    return `${wait}<div class="row wrap"><button class="btn small primary" type="button" data-rs="idle"${rs.pending ? ' disabled' : ''}>Reiniciar cuando estén libres</button><button class="btn small" type="button" data-rs="now">Reiniciar ahora</button></div>`;
+  };
+  const drawRs = () => {
+    m.el.querySelectorAll('.rs-slot').forEach((el) => { el.innerHTML = rsHtml(); });
+    clearTimeout(rsTimer);
+    if (rs.pending && m.el.isConnected) rsTimer = setTimeout(rsLoad, 10_000);
+  };
+  const rsLoad = async () => { try { rs = await api('GET', '/api/users/restart-status'); } catch { /* sin datos */ } drawRs(); };
+  if (admin) {
+    m.body.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-rs]');
+      if (!b) return;
+      try {
+        if (b.dataset.rs === 'idle') { rs = await busyBtn(b, 'Programando…', () => api('POST', '/api/users/restart-all', { when: 'idle' })); toast('Los espacios se reiniciarán cuando estén libres'); }
+        else if (b.dataset.rs === 'cancel') rs = await busyBtn(b, 'Cancelando…', () => api('POST', '/api/users/restart-cancel'));
+        else if (await busyBtn(b, 'Reiniciando…', () => spacesRestart())) rs = { pending: false, busy: [] };
+        drawRs();
+      } catch (err) { toast(err.message, 'err'); }
+    });
+    drawRs(); rsLoad();
+  }
+
+  // Chromium (Playwright): se instala una vez para todos desde aquí; los usuarios solo lo activan
+  let br = null;
+  let brTimer = null;
+  let brSent = null; // { at, installed }: petición enviada al ayudante, a la espera de que empiece
+  const brWaiting = () => brSent && !br.browser.error && !br.browser.installing && br.browser.installed === brSent.installed && Date.now() - brSent.at < 30_000;
+  const brHtml = () => {
+    if (!br) return '<p class="muted">Cargando…</p>';
+    const b = br.browser;
+    if (brWaiting()) return '<div class="row" style="gap:8px"><span class="spin"></span><strong>Enviando la petición al servidor…</strong></div>';
+    if (brSent && !b.installing && b.installed === brSent.installed && !b.error) { brSent = null; return `<div class="banner err" style="margin:0 0 10px">El ayudante no respondió. En el VPS: systemctl status opencode-browser.path</div>${brHtml()}`; }
+    if (b.installing || b.installed !== brSent?.installed) brSent = null;
+    if (b.installing) return `<div class="row" style="gap:8px"><span class="spin"></span><strong>Instalando Chromium…</strong></div><div class="muted" style="font-size:13px;margin-top:4px">${esc(b.message || '')}</div>${b.log.length ? `<div class="output" style="margin-top:8px;max-height:120px;overflow:auto;font-size:11.5px">${esc(b.log.join('\n'))}</div>` : ''}`;
+    const err = b.error ? `<div class="banner err" style="margin:0 0 10px">${esc(b.error)}</div>` : '';
+    if (b.installed) return `${err}<p style="margin:0">Chromium listo · Playwright MCP ${esc(b.version || '')}</p>${b.helper ? '<div class="row wrap" style="margin-top:8px"><button class="btn small" type="button" data-br="install">Actualizar</button><button class="btn small danger" type="button" data-br="remove">Desinstalar</button></div>' : ''}<p class="muted" style="font-size:12.5px;margin:8px 0 0">Cada usuario lo activa en Ajustes → Extensiones → Playwright. Chromium corre sin pantalla y sin su aislamiento interno; cada navegador abierto ocupa unos 300 MB de RAM.</p>`;
+    if (!b.helper) return `${err}<div class="hint">Falta el ayudante de Chromium en el VPS. Instálalo una vez por SSH y vuelve a abrir esta pantalla:${cmdBox('sudo /opt/opencode-cloud/deploy/browser.sh setup', 'margin-top:8px')}</div>`;
+    return `${err}<p class="muted" style="margin:0 0 8px">Hay que descargar Chromium y sus librerías (unos 400 MB y varios minutos). No interrumpe a nadie.</p><button class="btn primary" type="button" data-br="install">Instalar Chromium</button>`;
+  };
+  const drawBr = () => {
+    const el = q('#br-block'); if (!el) return;
+    el.innerHTML = brHtml();
+    clearTimeout(brTimer);
+    if ((br?.browser?.installing || brWaiting()) && m.el.isConnected) brTimer = setTimeout(brLoad, brWaiting() ? 1500 : 3000);
+  };
+  const brLoad = async () => { try { br = await api('GET', '/api/extensions/browser'); } catch (err) { const el = q('#br-block'); if (el && !br) el.innerHTML = `<div class="banner err">${esc(err.message)}</div>`; } drawBr(); };
+  if (admin) {
+    m.body.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-br]');
+      if (!b) return;
+      try {
+        const act = b.dataset.br;
+        if (act === 'install' && !confirm('Se descargarán Chromium y sus librerías (unos 400 MB). Puede tardar varios minutos y no interrumpe a nadie. ¿Continuar?')) return;
+        if (act === 'remove' && !confirm('Se desinstalará Chromium para todos los usuarios. ¿Continuar?')) return;
+        br = await busyBtn(b, 'Iniciando…', () => api('POST', '/api/extensions/browser', { action: act }));
+        brSent = { at: Date.now(), installed: br.browser.installed };
+        drawBr();
+      } catch (err) { toast(err.message, 'err'); await brLoad(); }
+    });
+    brLoad();
+  }
+
   const egAfter = async (r, okMsg) => {
     eg = { ...eg, ...r };
     $('#eg-block', m.el).innerHTML = egressBlock(); egBind();
     if (!r.ok) { toast(r.message || 'No se pudo aplicar', 'err'); return; }
     toast(r.message || okMsg);
-    if (admin) await spacesRestart('Para que los espacios usen la nueva salida hay que reiniciarlos (lo que estén haciendo se interrumpe). ¿Reiniciar ahora?');
-    else if (await confirmInterrupt('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?')) {
+    if (admin) {
+      if (confirm('Para que los espacios usen la nueva salida hay que reiniciarlos.\n\nAceptar: se reinician solos cuando nadie esté trabajando (sin interrumpir a nadie).\nCancelar: lo haré yo después con los botones de esta pantalla.')) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Los espacios se reiniciarán cuando estén libres'); }
+    } else if (await confirmInterrupt('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?')) {
       await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); await loadModels(); renderModels();
     }
     egRefresh();
   };
   const egBind = () => {
-    click('#spaces-restart-eg', async (b) => { await busyBtn(b, 'Reiniciando…', () => spacesRestart()); });
     click('#eg-recheck', async (b) => { await busyBtn(b, 'Comprobando…', egRefresh); if (!eg?.helper) toast('Todavía no se detecta el ayudante', 'err'); });
     q('#eg-file')?.addEventListener('change', async (e) => {
       const f = e.target.files?.[0]; if (!f) return;
@@ -2319,11 +2392,11 @@ async function settingsModal(section, { admin = false } = {}) {
     q('#eg-conf')?.addEventListener('input', (e) => { egDraft = e.target.value; });
     click('#eg-reconnect', async (b) => { const r = await busyBtn(b, 'Reconectando…', () => api('POST', '/api/egress/action', { action: 'reconnect' })); eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message || 'Hecho', r.ok ? undefined : 'err'); egRefresh(); });
     click('#eg-on', async (b) => egAfter(await busyBtn(b, 'Activando…', () => api('POST', '/api/egress/action', { action: 'on' })), 'Túnel activado'));
-    click('#eg-off', async (b) => { if (!(await confirmInterrupt(admin ? 'Se desactivará el túnel y se reiniciarán los espacios de los usuarios. ¿Continuar?' : 'Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
+    click('#eg-off', async (b) => { if (!(admin ? confirm('Se desactivará el túnel. Los espacios de los usuarios se reiniciarán solos cuando nadie esté trabajando. ¿Continuar?') : await confirmInterrupt('Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
       const r = await busyBtn(b, 'Desactivando…', () => api('POST', '/api/egress/action', { action: 'off' }));
       eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message);
-      if (admin) await api('POST', '/api/users/restart-all'); else await api('POST', '/api/opencode/restart');
-      toast(admin ? 'Espacios reiniciados' : 'OpenCode reiniciado'); egRefresh(); });
+      if (admin) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Los espacios se reiniciarán cuando estén libres'); } else { await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); }
+      egRefresh(); });
     click('#eg-remove', async (b) => { if (!confirm('¿Quitar la configuración de WireGuard del VPS?')) return;
       const r = await busyBtn(b, 'Quitando…', () => api('POST', '/api/egress/action', { action: 'remove' }));
       eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message); egRefresh(); });
@@ -2387,7 +2460,6 @@ async function settingsModal(section, { admin = false } = {}) {
   const usersBind = () => {
     q('#nu-gen')?.addEventListener('click', () => { q('#nu-pass').value = genPass(); });
     click('#users-refresh', async (b) => { await busyBtn(b, 'Comprobando…', usersRefresh); });
-    click('#spaces-restart-us', async (b) => { await busyBtn(b, 'Reiniciando…', () => spacesRestart()); usersRefresh(); });
     click('#nu-create', async (b) => {
       const name = q('#nu-name').value.trim().toLowerCase(); const password = q('#nu-pass').value;
       await busyBtn(b, 'Creando… (unos segundos)', () => api('POST', '/api/users', { name, password }));
@@ -2461,7 +2533,7 @@ async function settingsModal(section, { admin = false } = {}) {
     if (b.installed) {
       return `${err}<p style="margin:0">Chromium listo · Playwright MCP ${esc(b.version || '')}</p>${ext.canInstallBrowser && b.helper ? '<div class="row wrap" style="margin-top:8px"><button class="btn small" data-x="browser-install">Actualizar</button><button class="btn small danger" data-x="browser-remove">Desinstalar</button></div>' : ''}${risk}`;
     }
-    if (!ext.canInstallBrowser) return `${err}<div class="hint">Chromium todavía no está instalado en el servidor. Pídele al administrador que lo instale desde Ajustes → Extensiones.</div>`;
+    if (!ext.canInstallBrowser) return `${err}<div class="hint">Chromium todavía no está instalado en el servidor. Pídele al administrador que lo instale desde su panel (Ajustes → OpenCode → Navegador).</div>`;
     if (!b.helper) return `${err}<div class="hint">Instala una vez el ayudante por SSH en el VPS y vuelve a abrir los ajustes:${cmdBox('sudo /opt/opencode-cloud/deploy/browser.sh setup', 'margin-top:8px')}</div>`;
     return `${err}<p class="muted" style="margin:0 0 8px">Hay que instalar Chromium y sus librerías (unos 400 MB y varios minutos). Se instala una vez para todos los usuarios.</p><button class="btn primary" data-x="browser-install">Instalar Chromium</button>`;
   };

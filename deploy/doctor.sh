@@ -102,9 +102,9 @@ fi
 sec "Extensiones (Context7, Playwright) (opcional)"
 if [ -f /opt/opencode-cloud-mcp/ready.json ]; then
   ok "Chromium y Playwright MCP instalados ($(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' /opt/opencode-cloud-mcp/ready.json))"
-  [ -x /opt/opencode-cloud-mcp/node_modules/.bin/playwright-mcp ] || bad "Falta el ejecutable playwright-mcp: reinstala desde Ajustes → Extensiones"
+  [ -x /opt/opencode-cloud-mcp/node_modules/.bin/playwright-mcp ] || bad "Falta el ejecutable playwright-mcp: reinstala desde el panel admin → OpenCode → Navegador"
 else
-  systemctl is-active --quiet opencode-browser.path 2>/dev/null && ok "Ayudante de Chromium instalado (Chromium aún no instalado: Ajustes → Extensiones)" || echo "  · Sin Playwright (opcional): sudo $APP_DIR/deploy/browser.sh setup"
+  systemctl is-active --quiet opencode-browser.path 2>/dev/null && ok "Ayudante de Chromium instalado (Chromium aún no instalado: panel admin → OpenCode → Navegador)" || echo "  · Sin Playwright (opcional): sudo $APP_DIR/deploy/browser.sh setup"
 fi
 
 sec "Aislamiento de usuarios"

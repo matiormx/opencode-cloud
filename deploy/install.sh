@@ -315,6 +315,11 @@ systemctl restart "$SERVICE"
 log "Configurando el aislamiento de usuarios"
 APP_USER="$APP_USER" APP_DIR="$APP_DIR" DATA_DIR="$DATA_DIR" bash "$APP_DIR/deploy/multiuser.sh" setup
 
+# Ayudante de Chromium (Playwright): solo prepara el servicio; Chromium se instala después con un botón en el panel de
+# administración (/admin/ → OpenCode → Navegador). Es opcional: si falla, la instalación sigue.
+log "Preparando el ayudante de Chromium (opcional)"
+APP_USER="$APP_USER" DATA_DIR="$DATA_DIR" bash "$APP_DIR/deploy/browser.sh" setup || warn "No se pudo preparar el ayudante de Chromium; puedes hacerlo luego: sudo $APP_DIR/deploy/browser.sh setup"
+
 # ---------------------------------------------------------------- HTTPS con Caddy (opcional)
 if [ -n "$DOMAIN" ]; then
   [[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "DOMAIN no válido"

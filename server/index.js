@@ -14,6 +14,7 @@ import * as gh from './github.js';
 import * as instances from './instances.js';
 import * as oc from './opencode.js';
 import * as queue from './queue.js';
+import * as restarts from './restarts.js';
 import * as reqmon from './reqmon.js';
 import * as skills from './skills.js';
 import * as sysmon from './sysmon.js';
@@ -238,7 +239,11 @@ router.put('/extensions/playwright', wrap(async (req, res) => { ext.setPlaywrigh
 router.post('/extensions/custom', wrap(async (req, res) => { ext.addCustom(req.body || {}); res.json(await extView()); }));
 router.put('/extensions/custom/:id', wrap(async (req, res) => { ext.setCustom(String(req.params.id), req.body || {}); res.json(await extView()); }));
 router.delete('/extensions/custom/:id', wrap(async (req, res) => { ext.removeCustom(String(req.params.id)); res.json(await extView()); }));
-router.post('/extensions/browser', notInstance, wrap(async (req, res) => { ext.browserRequest(String(req.body?.action || '')); res.json(await extView()); }));
+// Chromium es del servidor, no de un usuario: lo gestiona el administrador. En el panel (pasarela) solo se devuelve el estado
+// del navegador; en modo normal, la vista completa de extensiones.
+const browserView = () => ({ canInstallBrowser: !config.instance, browser: ext.browserInfo() });
+router.get('/extensions/browser', notInstance, wrap(async (req, res) => res.json(browserView())));
+router.post('/extensions/browser', notInstance, wrap(async (req, res) => { ext.browserRequest(String(req.body?.action || '')); res.json(config.multiuser ? browserView() : await extView()); }));
 
 // --- Habilidades (skills): se descargan de un repositorio de GitHub y se instalan en el espacio del usuario ---
 const skillsView = () => ({ dir: skills.dir(), items: skills.installed(), restartNeeded: skills.changedAt() > oc.startedAtMs() });
@@ -344,10 +349,15 @@ router.post(
   multiOnly,
   adminOnly,
   wrap(async (req, res) => {
+    // when:'idle' → se espera a que ningún espacio esté trabajando (persistente); por defecto, ahora mismo
+    if (req.body?.when === 'idle') return res.json({ ok: true, ...restarts.schedule() });
+    restarts.cancel();
     await instances.request('restart-all');
-    res.json({ ok: true });
+    res.json({ ok: true, ...restarts.status() });
   }),
 );
+router.get('/users/restart-status', multiOnly, adminOnly, wrap(async (req, res) => res.json(restarts.status())));
+router.post('/users/restart-cancel', multiOnly, adminOnly, wrap(async (req, res) => res.json(restarts.cancel())));
 // El administrador puede entrar en el espacio de un usuario sin su contraseña (sesión de trabajo corta, queda en el registro)
 router.post(
   '/users/:name/enter',
@@ -1054,6 +1064,7 @@ app.use((err, req, res, next) => {
 // La pasarela del modo multiusuario no ejecuta al agente: OpenCode corre en el espacio de cada usuario (incluido el administrador)
 const gatewayOnly = config.multiuser && !config.instance;
 if (!gatewayOnly) oc.start();
+if (gatewayOnly) restarts.resume();
 if (!config.instance) updater.startPeriodicCheck();
 if (!gatewayOnly) queue.start();
 sysmon.start();
