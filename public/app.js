@@ -592,7 +592,7 @@ function renderWait() {
   const row = (state.act?.sessions || []).find((r) => r.sessionId === state.sessionId && r.projectId === state.project?.id);
   if (row?.state === 'retrying') {
     const s = remainingSec(row);
-    box.innerHTML = `<span class="wait-ico" aria-hidden="true">⏳</span><span><strong>Esperando al proveedor.</strong> ${esc(row.retry.message || 'Límite de peticiones o error temporal')} · reintento ${row.retry.attempt}${s != null ? ` · próximo intento en ${s} s` : ''}</span>`;
+    box.innerHTML = `<span class="wait-ico" aria-hidden="true">⏳</span><span><strong>Esperando al proveedor.</strong> ${esc(row.retry.message || 'Límite de peticiones o error temporal')} · reintento ${row.retry.attempt}${s != null ? ` · próximo intento en ${s} s` : ''}</span>${/usage|subscribe|quota|credit|billing|exceed|limit/i.test(row.retry.message || '') ? '<button class="btn small" data-act="settings" data-section="ia" style="margin-left:auto;flex:none">Añadir clave</button>' : ''}`;
     box.classList.remove('hidden');
   } else if (state.questions.size || row?.state === 'question') {
     const q = [...state.questions.values()][0];
@@ -1521,6 +1521,8 @@ function renderPerms() {
 /* ============================== Composer ============================== */
 // Dónde crear la API key de cada proveedor (id de OpenCode → enlace y nota)
 const PROVIDER_HELP = {
+  opencode: { url: 'https://opencode.ai/auth', note: 'OpenCode Zen: entra en opencode.ai, crea o copia tu API key y pégala aquí. Incluye algunos modelos gratuitos con límite de uso; el resto se paga por uso.' },
+  'opencode-go': { url: 'https://opencode.ai/auth', note: 'Plan OpenCode Go: suscríbete en opencode.ai, copia tu API key y pégala aquí. Da más uso que los modelos gratuitos.' },
   nvidia: { url: 'https://build.nvidia.com/settings/api-keys', note: 'Usa la clave de build.nvidia.com (botón «Get API Key» de cualquier modelo). Las claves de NGC solo valen si incluyen «Public API Endpoints»; si no, da error 403.' },
   openrouter: { url: 'https://openrouter.ai/keys', note: 'Una sola clave para muchos modelos; algunos son gratuitos.' },
   anthropic: { url: 'https://console.anthropic.com/settings/keys' },
