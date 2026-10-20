@@ -7,7 +7,8 @@ import * as instances from './instances.js';
 import * as users from './users.js';
 
 // Rutas que atiende siempre la pasarela, para cualquier usuario
-const LOCAL = new Set(['/health', '/me', '/login', '/logout', '/password']);
+// '/system': los recursos son los del servidor entero y las instancias de los usuarios no pueden medirlos (ProcSubset=pid les oculta /proc/stat y /proc/net)
+const LOCAL = new Set(['/health', '/me', '/login', '/logout', '/password', '/system']);
 // El panel de administración usa su propia API (/admin/api/…, que index.js reescribe a /api/… marcando req.adminCtx):
 // ahí solo hay usuarios, actualizar la app, red y recursos del servidor, y solo entra el administrador.
 // Todo lo demás (proyectos, el agente, claves, GitHub) va al espacio propio de cada usuario (ocu-<nombre>), también el del administrador:
