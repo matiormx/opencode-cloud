@@ -87,6 +87,10 @@ El instalador se puede volver a ejecutar sin riesgo: actualiza el código, conse
 
 Mientras OpenCode trabaja, el botón de enviar pasa a **Añadir a la cola** en cuanto escribes algo (y vuelve a ser **Detener** con el campo vacío). Los mensajes en espera aparecen encima del cuadro de texto: quita uno con la ✕ o usa **Vaciar**. Al pulsar **Detener** la cola se pone **en pausa** para que no arranque sola otra tarea; usa **Reanudar** para continuar. Máximo 20 mensajes por conversación.
 
+### Adjuntar archivos
+
+El clip del chat adjunta imágenes (las ve el modelo) y cualquier otro archivo: se sube a la carpeta `adjuntos/` del proyecto (hasta 50 MB y 8 por mensaje) y el mensaje le dice a OpenCode dónde está. Así puede leer CSV, PDF, Word, ZIP…
+
 ### Probar el proyecto sin GitHub: descargar y vista previa
 
 Botones arriba, junto a Git (ojo = vista previa, flecha = descargar), y también en el menú del proyecto (los tres puntos junto a su nombre):

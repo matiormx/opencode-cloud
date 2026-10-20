@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import express from 'express';
 import * as auth from './auth.js';
@@ -902,6 +904,35 @@ function parseImages(list) {
     return { type: 'file', mime: m[1], filename: name, url: m[0] };
   });
 }
+
+// Archivos adjuntos de cualquier tipo: se guardan en la carpeta «adjuntos» del proyecto y el mensaje le dice a OpenCode dónde están.
+const UPLOAD_MAX = 50 * 1024 * 1024; // por debajo del límite de 100 MB de Cloudflare
+router.post('/projects/:id/upload', wrap(async (req, res) => {
+  const p = getProject(req);
+  const raw = String(req.query.name || '').normalize('NFC');
+  let name = path.basename(raw.replace(/\\/g, '/')).replace(/[^\p{L}\p{N}._\- ()]/gu, '_').replace(/^\.+/, '').trim().slice(0, 100);
+  if (!name) name = 'archivo';
+  if (Number(req.headers['content-length'] || 0) > UPLOAD_MAX) throw fail('El archivo supera los 50 MB', 413);
+  const dir = path.join(p.path, 'adjuntos');
+  await fsp.mkdir(dir, { recursive: true });
+  const ext = path.extname(name);
+  const base = name.slice(0, name.length - ext.length);
+  let target = '';
+  for (let i = 0; i < 100; i++) {
+    const t = path.join(dir, i ? `${base}-${i}${ext}` : name);
+    if (!fs.existsSync(t)) { target = t; break; }
+  }
+  if (!target) throw fail('Ya hay demasiados archivos con ese nombre en «adjuntos»');
+  let size = 0;
+  const limit = new Transform({ transform(chunk, enc, cb) { size += chunk.length; cb(size > UPLOAD_MAX ? fail('El archivo supera los 50 MB', 413) : null, chunk); } });
+  try {
+    await pipeline(req, limit, fs.createWriteStream(target, { flags: 'wx', mode: 0o644 }));
+  } catch (err) {
+    await fsp.rm(target, { force: true });
+    throw err.status ? err : fail('No se pudo guardar el archivo', 500);
+  }
+  res.json({ ok: true, name: path.basename(target), path: `adjuntos/${path.basename(target)}`, size });
+}));
 
 router.post(
   '/projects/:id/sessions/:sid/send',

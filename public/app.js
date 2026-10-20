@@ -232,6 +232,7 @@ const fmtDate = (ms) => new Date(ms).toLocaleString('es-ES', { day: 'numeric', m
 /* ============================== Estado ============================== */
 const state = {
   attach: [], // imágenes pendientes de enviar: { name, url }
+  files: [], // archivos pendientes: { name, size, pid, path?, uploading?, error? } (se suben al proyecto al elegirlos)
   me: null, // { name, role } del usuario con sesión
   multiuser: false,
   projects: [],
@@ -416,9 +417,9 @@ async function mountApp() {
           <div class="composer">
             <div class="attach-row hidden" id="attach-row"></div>
             <div id="input" class="chat-input" role="textbox" aria-multiline="true" aria-label="Instrucción para OpenCode" contenteditable="plaintext-only" enterkeyhint="send" inputmode="text" autocapitalize="sentences" autocorrect="on" spellcheck="true" data-placeholder="Pide algo a OpenCode…"></div>
-            <input type="file" id="attach-file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+            <input type="file" id="attach-file" multiple hidden>
             <div class="composer-bar">
-              <button class="attach-btn" id="attach-btn" type="button" aria-label="Adjuntar imagen" title="Adjuntar imagen">${ico(I.image)}</button>
+              <button class="attach-btn" id="attach-btn" type="button" aria-label="Adjuntar archivo o imagen" title="Adjuntar archivo o imagen">${ico(I.image)}</button>
               <button class="model-btn" id="model-btn" type="button" data-act="model-picker" aria-haspopup="dialog" aria-label="Elegir modelo"></button>
               <button class="ctx-btn hidden" id="ctx-btn" type="button" data-act="context" aria-haspopup="dialog" aria-label="Contexto de la conversación"></button>
               <span class="grow"></span>
@@ -1573,6 +1574,8 @@ function modelPicker() {
 
 // --- Imágenes adjuntas ---
 const MAX_IMAGES = 4;
+const MAX_FILES = 8;
+const MAX_FILE_MB = 50;
 function readImage(file) {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
@@ -1605,18 +1608,46 @@ async function addImages(files) {
   }
   renderAttach();
 }
+async function addFiles(list) {
+  const pid = state.project?.id;
+  if (!pid) return;
+  for (const f of list) {
+    if (state.files.length >= MAX_FILES) { toast(`Máximo ${MAX_FILES} archivos por mensaje`, 'err'); break; }
+    if (f.size > MAX_FILE_MB * 1048576) { toast(`«${f.name}» supera los ${MAX_FILE_MB} MB`, 'err'); continue; }
+    const item = { name: f.name || 'archivo', size: f.size, pid, uploading: true };
+    state.files.push(item);
+    renderAttach();
+    try {
+      const res = await fetch(`/api/projects/${pid}/upload?name=${encodeURIComponent(item.name)}`, { method: 'POST', headers: { 'X-Requested-With': 'occloud', 'Content-Type': 'application/octet-stream' }, body: f });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) { showLogin(); throw new Error('Sesión caducada'); }
+      if (!res.ok) throw new Error(data.error || 'No se pudo subir el archivo');
+      item.path = data.path; item.uploading = false;
+    } catch (e) {
+      state.files = state.files.filter((x) => x !== item);
+      toast(`«${item.name}»: ${e.message}`, 'err');
+    }
+    renderAttach();
+  }
+}
+// Texto que se añade al mensaje para que OpenCode sepa dónde están los archivos adjuntos
+function filesNote(list) {
+  if (!list.length) return '';
+  return `Archivos adjuntos (ya están en el proyecto): ${list.map((f) => f.path).join(', ')}`;
+}
 function renderAttach() {
   const row = $('#attach-row');
   if (!row) return;
-  row.classList.toggle('hidden', !state.attach.length);
-  row.innerHTML = state.attach.map((a, i) => `<div class="thumb"><img src="${a.url}" alt="${esc(a.name)}"><button type="button" class="thumb-x" data-i="${i}" aria-label="Quitar imagen">×</button></div>`).join('');
+  row.classList.toggle('hidden', !state.attach.length && !state.files.length);
+  row.innerHTML = state.attach.map((a, i) => `<div class="thumb"><img src="${a.url}" alt="${esc(a.name)}"><button type="button" class="thumb-x" data-i="${i}" aria-label="Quitar imagen">×</button></div>`).join('')
+    + state.files.map((f, i) => `<div class="fatt${f.uploading ? ' up' : ''}"><span class="fn">${esc(f.name)}</span><span class="fs">${f.uploading ? 'Subiendo…' : fmtSize(f.size)}</span><button type="button" class="thumb-x" data-fi="${i}" aria-label="Quitar archivo">×</button></div>`).join('');
   updateSendButton();
 }
 
 function updateSendButton() {
   const b = $('#send');
   if (!b) return;
-  const typed = Boolean($('#input')?.value.trim()) || state.attach.length > 0;
+  const typed = Boolean($('#input')?.value.trim()) || state.attach.length > 0 || state.files.length > 0;
   const stop = state.busy && !typed;
   b.classList.toggle('stop', stop);
   b.innerHTML = ico(stop ? I.stop : I.send);
@@ -1666,13 +1697,19 @@ async function submitInput() {
     try { await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/abort`); loadQueue(); } catch (e) { toast(e.message, 'err'); }
     return;
   }
-  if ((!text.trim() && !state.attach.length) || !state.project) return;
+  const files = state.files.filter((f) => f.pid === state.project?.id);
+  if ((!text.trim() && !state.attach.length && !files.length) || !state.project) return;
+  if (files.some((f) => f.uploading)) { toast('Espera a que terminen de subirse los archivos', 'err'); return; }
   if (state.busy && state.attach.length) { toast('Las imágenes solo se pueden enviar cuando OpenCode no está trabajando. Espera a que termine o quítalas.', 'err'); return; }
+  const note = filesNote(files);
+  const full = [text.trim(), note].filter(Boolean).join('\n\n');
   if (state.busy) {
     // OpenCode está ocupado: el mensaje espera en la cola del servidor
     const [providerID, modelID] = (state.model || '').split('::');
     try {
-      await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue`, { text, model: providerID && modelID ? { providerID, modelID } : undefined });
+      await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue`, { text: full, model: providerID && modelID ? { providerID, modelID } : undefined });
+      state.files = [];
+      renderAttach();
       input.value = '';
       autosize(input);
       updateSendButton();
@@ -1683,9 +1720,10 @@ async function submitInput() {
   const images = state.attach;
   input.value = '';
   state.attach = [];
+  state.files = [];
   autosize(input);
   renderAttach();
-  await sendMessage(text, images);
+  await sendMessage(full, images);
 }
 
 
@@ -3037,8 +3075,17 @@ function bindShell() {
     } catch (err) { toast(err.message, 'err'); }
   });
   $('#attach-btn').addEventListener('click', () => $('#attach-file').click());
-  $('#attach-file').addEventListener('change', async (e) => { const f = [...e.target.files]; e.target.value = ''; await addImages(f); });
-  $('#attach-row').addEventListener('click', (e) => { const b = e.target.closest('.thumb-x'); if (b) { state.attach.splice(Number(b.dataset.i), 1); renderAttach(); } });
+  $('#attach-file').addEventListener('change', async (e) => {
+    const f = [...e.target.files]; e.target.value = '';
+    const isImg = (x) => /^image\/(png|jpeg|webp|gif)$/.test(x.type);
+    await addImages(f.filter(isImg)); // las fotos van al modelo para que las vea
+    await addFiles(f.filter((x) => !isImg(x))); // el resto se guarda en el proyecto
+  });
+  $('#attach-row').addEventListener('click', (e) => {
+    const b = e.target.closest('.thumb-x'); if (!b) return;
+    if (b.dataset.fi != null) state.files.splice(Number(b.dataset.fi), 1); else state.attach.splice(Number(b.dataset.i), 1);
+    renderAttach();
+  });
   input.addEventListener('paste', (e) => { const f = [...(e.clipboardData?.files || [])].filter((x) => x.type.startsWith('image/')); if (f.length) { e.preventDefault(); addImages(f); } });
 
   // Botón "ir al final" cuando el usuario se aleja del último mensaje
