@@ -143,7 +143,7 @@ function makeSpring(initial, onUpdate, { response = 0.34, eps = 0.001, veps = 0.
 // Resistencia progresiva al pasar el límite (apple-design §9)
 const rubberband = (over, dim = 420, c = 0.55) => (over * dim * c) / (dim + c * Math.abs(over));
 
-function openModal(title, html, { wide = false, bare = false } = {}) {
+function openModal(title, html, { wide = false, bare = false, sticky = false } = {}) {
   const back = document.createElement('div');
   back.className = `backdrop spr${bare ? ' top' : ''}`;
   back.innerHTML = `<div class="modal ${wide ? 'wide' : ''}${bare ? ' bare' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
@@ -163,7 +163,7 @@ function openModal(title, html, { wide = false, bare = false } = {}) {
 
   const remove = () => { y.stop(); closing = true; back.remove(); document.removeEventListener('keydown', onKey); };
   const close = (vel = 0) => {
-    if (closing) return;
+    if (closing || sticky) return;
     closing = true;
     document.removeEventListener('keydown', onKey);
     if (reducedMotion()) { back.remove(); return; }
@@ -186,7 +186,7 @@ function openModal(title, html, { wide = false, bare = false } = {}) {
     handle.style.touchAction = 'none';
     let id = null; let sy = 0; let base = 0; let hist = [];
     handle.addEventListener('pointerdown', (e) => {
-      if (closing || desk() || e.target.closest('button, a, input, textarea, select')) return;
+      if (closing || sticky || desk() || e.target.closest('button, a, input, textarea, select')) return;
       id = e.pointerId; handle.setPointerCapture(id); y.stop(); sy = e.clientY; base = y.value; hist = [[e.timeStamp, e.clientY]];
     });
     handle.addEventListener('pointermove', (e) => {
@@ -316,14 +316,14 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
 /* ============================== Login ============================== */
 function showLogin() {
   closeEvents();
-  const multi = state.multiuser;
+  const multi = state.multiuser && !state.adminHost;
   let last = '';
   try { last = localStorage.getItem('lastUser') || ''; } catch { /* sin almacenamiento */ }
   $('#root').innerHTML = `
     <div class="login"><form class="login-card" id="login-form">
       <div class="logo">${ico(I.code, 'stroke="#fff" stroke-width="2.4"')}</div>
-      <h1>OpenCode Cloud</h1>
-      <p class="muted" style="margin:0 0 20px">Inicia sesión para continuar</p>
+      <h1>${state.adminHost ? 'Administración' : 'OpenCode Cloud'}</h1>
+      <p class="muted" style="margin:0 0 20px">${state.adminHost ? 'Panel del administrador' : 'Inicia sesión para continuar'}</p>
       ${multi ? `<div class="field"><label for="un">Usuario</label><input id="un" type="text" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" value="${esc(last)}" ${last ? '' : 'autofocus'} required></div>` : ''}
       <div class="field"><label for="pw">Contraseña</label><input id="pw" type="password" autocomplete="current-password" ${multi && !last ? '' : 'autofocus'} required></div>
       <button class="btn primary" style="width:100%" type="submit">Entrar</button>
@@ -337,7 +337,7 @@ function showLogin() {
       const r = await busyBtn(btn, 'Entrando…', () => api('POST', '/api/login', body));
       state.me = r.user || null;
       if (multi) { try { localStorage.setItem('lastUser', body.username); } catch { /* sin almacenamiento */ } }
-      await mountApp();
+      await (state.adminHost ? mountAdmin() : mountApp());
     } catch (err) {
       toast(err.message, 'err');
       $('#pw').select();
@@ -405,6 +405,23 @@ async function mountApp() {
   }
 }
 let timersStarted = false;
+
+// Panel de administración (dominio propio): solo usuarios, red, actualizaciones y recursos. No carga proyectos ni el agente.
+let adminTimer = null;
+const stopAdminTimer = () => { clearInterval(adminTimer); adminTimer = null; };
+async function mountAdmin() {
+  document.body.classList.add('adminapp');
+  $('#root').innerHTML = '<div class="splash" aria-hidden="true"><div class="logo">' + ico(I.code, 'stroke="#fff" stroke-width="2.4"') + '</div></div>';
+  await loadSys();
+  await settingsModal('main', { admin: true });
+  stopAdminTimer();
+  adminTimer = setInterval(async () => {
+    if (document.hidden) return;
+    await loadSys();
+    const slot = $('#adm-sys');
+    if (slot) slot.innerHTML = sysCardHtml();
+  }, 10_000);
+}
 
 function renderAll() {
   renderSidebar();
@@ -801,6 +818,7 @@ function sessionMenuModal(projectId, sessionId) {
 }
 
 function renderSidebar() {
+  if (!$('#sidebar')) return; // el panel de administración no tiene barra lateral
   const upd = state.update;
   const items = state.projects.map((p) => {
     const active = p.id === state.project?.id;
@@ -1941,17 +1959,17 @@ function projectMenuModal(id) {
 }
 
 /* ============================== Ajustes y actualizaciones ============================== */
-async function settingsModal(section) {
-  const m = openModal('Ajustes', '<p class="muted">Cargando…</p>', { wide: true, bare: true });
-  m.el.querySelector('.modal').insertAdjacentHTML('afterbegin', `<div class="sethead"><button type="button" class="cbtn" data-sback aria-label="Cerrar">${ico(I.x, 'width="22" height="22"')}</button><div class="settitle">Ajustes</div><button type="button" class="cbtn" data-sinfo aria-label="Acerca de"><span class="ibig">i</span></button></div>`);
+async function settingsModal(section, { admin = false } = {}) {
+  const m = openModal(admin ? 'Administración' : 'Ajustes', '<p class="muted">Cargando…</p>', { wide: true, bare: true, sticky: admin });
+  m.el.querySelector('.modal').insertAdjacentHTML('afterbegin', `<div class="sethead"><button type="button" class="cbtn" data-sback aria-label="Cerrar">${ico(I.x, 'width="22" height="22"')}</button><div class="settitle">${admin ? 'Administración' : 'Ajustes'}</div><button type="button" class="cbtn" data-sinfo aria-label="Acerca de"><span class="ibig">i</span></button></div>`);
   m.drag(m.el.querySelector('.sethead'));
   const usersP = state.multiuser ? api('GET', '/api/users').catch(() => null) : Promise.resolve(null);
   const [settings, gh, oc, upd, models, eg0] = await Promise.all([
-    api('GET', '/api/settings'),
-    api('GET', '/api/github/status').catch(() => ({ connected: false })),
-    api('GET', '/api/opencode/status').catch(() => ({})),
+    admin ? Promise.resolve({ canAdmin: true, canManageUsers: true, gitName: '', gitEmail: '' }) : api('GET', '/api/settings'),
+    admin ? Promise.resolve({ connected: false }) : api('GET', '/api/github/status').catch(() => ({ connected: false })),
+    admin ? Promise.resolve({}) : api('GET', '/api/opencode/status').catch(() => ({})),
     api('GET', '/api/update/status').catch(() => null),
-    api('GET', '/api/models').catch(() => null),
+    admin ? Promise.resolve(null) : api('GET', '/api/models').catch(() => null),
     api('GET', '/api/egress').catch(() => null),
   ]);
   let eg = eg0;
@@ -2089,14 +2107,16 @@ async function settingsModal(section) {
     const egVal = !eg ? '' : !eg.helper ? 'Sin ayudante' : eg.active ? 'Activa' : eg.configured ? 'Desactivada' : 'Sin configurar';
     const usersVal = settings.canManageUsers ? String(usersData?.users?.length ?? '') : 'Desactivado';
     return `
-      <button type="button" class="scard acct" data-go="conn"><span class="avatar">${esc((title || '?').slice(0, 1).toUpperCase())}</span><span class="acct-t"><strong>${esc(title)}</strong><span class="muted">${esc(sub)}</span></span><span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></button>
+      ${admin ? `<div class="scard acct"><span class="avatar">${esc((title || '?').slice(0, 1).toUpperCase())}</span><span class="acct-t"><strong>${esc(title)}</strong><span class="muted">Panel de administración</span></span></div>` : `<button type="button" class="scard acct" data-go="conn"><span class="avatar">${esc((title || '?').slice(0, 1).toUpperCase())}</span><span class="acct-t"><strong>${esc(title)}</strong><span class="muted">${esc(sub)}</span></span><span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></button>
       <div class="sgl">Cuenta</div>
       <div class="scard">${R('conn', I.tconn, 'Conexiones', gh.connected ? gh.login : 'Sin conectar')}${R('pw', I.lock, 'Contraseña')}</div>
       <div class="sgl">Aplicación</div>
       <div class="scard">${R('ia', I.tia, 'IA y OpenCode', oc.healthy ? (oc.version ? `v${oc.version}` : '') : 'No responde')}${R('ext', I.tpuz, 'Extensiones')}${R('sk', I.book, 'Habilidades')}</div>
+      ${settings.adminUrl ? `<div class="scard"><a class="srow" href="${esc(settings.adminUrl)}" target="_blank" rel="noopener noreferrer"><span class="si">${ico(I.tusers, 'width="22" height="22"')}</span><span class="sl">Panel de administración</span><span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></a></div>` : ''}`}
+      ${admin ? `<div class="sgl">Recursos</div><div class="scard" style="padding:10px 12px" id="adm-sys">${sysCardHtml()}</div>` : ''}
       ${canAdmin ? `<div class="sgl">Servidor</div>
       <div class="scard">${R('users', I.tusers, 'Usuarios', usersVal)}${R('red', I.tred, 'Salida a internet', egVal)}${R('upd', I.upd, 'Actualizaciones', u?.behind ? `${u.behind} nueva${u.behind > 1 ? 's' : ''}` : (u?.version ? `v${u.version}` : ''), Boolean(u?.behind))}</div>` : ''}
-      <div class="scard" style="margin-top:22px">${R('app', I.phone, 'Instalar aplicación', isStandalone() ? 'Instalada' : '')}</div>
+      <div class="scard" style="margin-top:22px">${admin ? R('pw', I.lock, 'Contraseña') : ''}${R('app', I.phone, 'Instalar aplicación', isStandalone() ? 'Instalada' : '')}</div>
       <div class="sgl">Apariencia</div>
       <div class="themes">${[['light', 'Claro'], ['dark', 'Oscuro'], ['system', 'Sistema']].map(([k, l]) => `<button type="button" class="theme-opt${theme === k ? ' on' : ''}" data-theme-set="${k}"><span class="tp ${k}"></span><span>${l}</span></button>`).join('')}</div>
       <div class="scard" style="margin-top:22px"><button type="button" class="srow danger" data-logout><span class="si">${ico(I.logout, 'width="22" height="22"')}</span><span class="sl">Cerrar sesión</span></button></div>`;
@@ -2542,11 +2562,12 @@ async function settingsModal(section) {
   const paneEl = (k) => m.body.querySelector(`[data-pane="${k}"]`);
   const drawMain = () => { const pn = paneEl('main'); if (pn) pn.innerHTML = mainHtml(); };
   const syncHead = (k) => {
-    head.querySelector('.settitle').textContent = k === 'main' ? 'Ajustes' : viewTitles[k];
+    head.querySelector('.settitle').textContent = k === 'main' ? (admin ? 'Administración' : 'Ajustes') : viewTitles[k];
     const back = head.querySelector('[data-sback]');
+    back.style.visibility = admin && k === 'main' ? 'hidden' : '';
     back.innerHTML = ico(k === 'main' ? I.x : I.chevl, 'width="22" height="22"');
     back.setAttribute('aria-label', k === 'main' ? 'Cerrar' : 'Atrás');
-    head.querySelector('[data-sinfo]').style.visibility = k === 'main' ? 'visible' : 'hidden';
+    head.querySelector('[data-sinfo]').style.visibility = k === 'main' && !admin ? 'visible' : 'hidden';
     head.classList.toggle('scrolled', (paneEl(k)?.scrollTop || 0) > 4);
   };
   // Los paneles se deslizan como en iOS: el nuevo entra desde la derecha y el anterior se aparta con paralaje;
@@ -2602,7 +2623,7 @@ async function settingsModal(section) {
     if (e.target.closest('[data-sback]')) return curView === 'main' ? m.close() : openView('main');
     const th = e.target.closest('[data-theme-set]');
     if (th) { store.set('theme', th.dataset.themeSet); applyTheme(th.dataset.themeSet, true); drawMain(); return; }
-    if (e.target.closest('[data-logout]')) { try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ } m.close(); showLogin(); return; }
+    if (e.target.closest('[data-logout]')) { try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ } if (admin) { stopAdminTimer(); document.querySelector('.backdrop')?.remove(); } else m.close(); showLogin(); return; }
     if (e.target.closest('[data-sinfo]')) {
       const u = state.update;
       const about = openModal('Acerca de', `<div class="stack">
@@ -2865,7 +2886,9 @@ tuneAll(document.body);
     const me = await api('GET', '/api/me');
     state.multiuser = Boolean(me.multiuser);
     state.me = me.user || null;
-    if (me.authenticated) await mountApp();
+    state.adminHost = Boolean(me.adminHost);
+    if (state.adminHost) document.title = 'OpenCode Admin';
+    if (me.authenticated) await (state.adminHost ? mountAdmin() : mountApp());
     else showLogin();
   } catch {
     showLogin();

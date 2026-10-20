@@ -8,6 +8,7 @@
 #   REPO_URL=https://github.com/usuario/opencode-cloud.git   repo del que instalar/actualizar (por defecto: el origin del clon actual)
 #   BRANCH=main            rama que sigue el actualizador
 #   DOMAIN=cloud.midominio.com   instala Caddy y publica con HTTPS automático (el DNS debe apuntar ya al VPS)
+#   ADMIN_DOMAIN=admin.midominio.com   panel de administración en su propio dominio (app/PWA aparte; requiere DOMAIN y su DNS)
 #   EXPOSE_HTTP=1          sin dominio: escucha en 0.0.0.0 por HTTP (inseguro salvo red privada)
 #   ADMIN_PASSWORD=...     contraseña inicial (si no se indica, se genera una)
 #   GITHUB_TOKEN=...       token para clonar un repo privado; también se guarda para que la WebUI pueda actualizar
@@ -19,6 +20,7 @@ set -euo pipefail
 [ -z "${DOMAIN+x}" ] && ASK_DOMAIN=1 || ASK_DOMAIN=0
 [ -z "${EXPOSE_HTTP+x}" ] && ASK_EXPOSE=1 || ASK_EXPOSE=0
 [ -z "${GITHUB_TOKEN+x}" ] && ASK_TOKEN=1 || ASK_TOKEN=0
+[ -z "${ADMIN_DOMAIN+x}" ] && ASK_ADMIN_DOMAIN=1 || ASK_ADMIN_DOMAIN=0
 [ -z "${ADMIN_PASSWORD+x}" ] && ASK_PASSWORD=1 || ASK_PASSWORD=0
 [ -z "${OC_PERMISSION+x}" ] && ASK_PERMISSION=1 || ASK_PERMISSION=0
 
@@ -28,6 +30,7 @@ DATA_DIR="${DATA_DIR:-/var/lib/opencode-cloud}"
 PORT="${PORT:-3000}"
 BRANCH="${BRANCH:-main}"
 DOMAIN="${DOMAIN:-}"
+ADMIN_DOMAIN="${ADMIN_DOMAIN:-}"
 EXPOSE_HTTP="${EXPOSE_HTTP:-0}"
 OC_PERMISSION="${OC_PERMISSION:-ask}"
 REPO_URL="${REPO_URL:-}"
@@ -97,6 +100,16 @@ if [ "$INTERACTIVE" = 1 ]; then
       echo "  Dominio no válido, prueba de nuevo." >/dev/tty
     done
   fi
+  if [ -n "$DOMAIN" ] && [ "$ASK_ADMIN_DOMAIN" = 1 ]; then
+    echo "Panel de administración en su propio dominio: se instala como una app aparte y no mezcla usuarios con proyectos." >/dev/tty
+    echo "El DNS de ese dominio también debe apuntar a este servidor (por ejemplo, admin.$DOMAIN)." >/dev/tty
+    while :; do
+      ask "Dominio del panel de administración (vacío = sin panel aparte): " ADMIN_DOMAIN
+      ADMIN_DOMAIN="${ADMIN_DOMAIN#http://}"; ADMIN_DOMAIN="${ADMIN_DOMAIN#https://}"; ADMIN_DOMAIN="${ADMIN_DOMAIN%%/*}"
+      [ -z "$ADMIN_DOMAIN" ] || { [[ "$ADMIN_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && [ "$ADMIN_DOMAIN" != "$DOMAIN" ]; } && break
+      echo "  Dominio no válido (o igual al principal), prueba de nuevo." >/dev/tty
+    done
+  fi
   if [ -z "$DOMAIN" ] && [ "$ASK_EXPOSE" = 1 ]; then
     echo "Sin dominio el servicio solo escucha en 127.0.0.1 (acceso por túnel SSH)." >/dev/tty
     if yesno "¿Exponerlo por HTTP sin cifrar en el puerto $PORT? (no recomendado)" n; then EXPOSE_HTTP=1; fi
@@ -141,6 +154,7 @@ if [ "$INTERACTIVE" = 1 ]; then
   echo "Resumen:" >/dev/tty
   echo "  Repositorio:   $REPO_URL (rama $BRANCH)" >/dev/tty
   if [ -n "$DOMAIN" ]; then echo "  Acceso:        https://$DOMAIN (Caddy + HTTPS)" >/dev/tty
+    [ -n "$ADMIN_DOMAIN" ] && echo "  Administración: https://$ADMIN_DOMAIN (app aparte)" >/dev/tty
   elif [ "$EXPOSE_HTTP" = 1 ]; then echo "  Acceso:        http://IP:$PORT (sin cifrar)" >/dev/tty
   else echo "  Acceso:        solo local (túnel SSH)" >/dev/tty; fi
   echo "  Token GitHub:  $([ -n "$GITHUB_TOKEN" ] && echo sí || echo no)" >/dev/tty
@@ -230,6 +244,7 @@ HOST=127.0.0.1
 [ "$EXPOSE_HTTP" = "1" ] && HOST=0.0.0.0
 SECURE=0
 [ -n "$DOMAIN" ] && SECURE=1
+[ -z "$ADMIN_DOMAIN" ] || [[ "$ADMIN_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "ADMIN_DOMAIN no válido"
 
 ENV_FILE="/etc/$SERVICE.env"
 cat > "$ENV_FILE" <<EOF
@@ -240,6 +255,7 @@ SECURE_COOKIES=$SECURE
 UPDATE_BRANCH=$BRANCH
 OC_PERMISSION=$OC_PERMISSION
 EOF
+[ -n "$DOMAIN" ] && [ -n "$ADMIN_DOMAIN" ] && echo "ADMIN_HOST=$ADMIN_DOMAIN" >> "$ENV_FILE"
 chown root:"$APP_USER" "$ENV_FILE"
 chmod 640 "$ENV_FILE"
 
@@ -315,6 +331,15 @@ $DOMAIN {
 	}
 }
 EOF
+  if [ -n "$ADMIN_DOMAIN" ]; then
+    cat >> /etc/caddy/Caddyfile <<EOF
+
+$ADMIN_DOMAIN {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:$PORT
+}
+EOF
+  fi
   systemctl enable caddy >/dev/null
   systemctl reload caddy 2>/dev/null || systemctl restart caddy
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -337,6 +362,7 @@ echo
 printf '\033[1;32m✔ OpenCode Cloud instalado\033[0m\n\n'
 if [ -n "$DOMAIN" ]; then
   echo "  URL:         https://$DOMAIN"
+  [ -n "$ADMIN_DOMAIN" ] && echo "  Panel admin: https://$ADMIN_DOMAIN   (instálalo como app aparte; entra con el usuario admin)"
 elif [ "$EXPOSE_HTTP" = "1" ]; then
   echo "  URL:         http://$IP:$PORT   (HTTP sin cifrar: úsalo solo en una red de confianza)"
 else

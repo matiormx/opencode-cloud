@@ -41,6 +41,20 @@ app.use((req, res, next) => {
   next();
 });
 
+// En el dominio del panel de administración, la app se instala aparte: otro nombre, otro id y otros iconos
+app.use((req, res, next) => {
+  if (!gateway.isAdminHost(req)) return next();
+  if (req.path === '/manifest.webmanifest') {
+    const m = JSON.parse(fs.readFileSync(path.join(config.root, 'public', 'manifest.webmanifest'), 'utf8'));
+    Object.assign(m, { id: '/admin', name: 'OpenCode Admin', short_name: 'Admin', description: 'Panel de administración de OpenCode Cloud.', theme_color: '#1f2937', background_color: '#1f2937' });
+    m.icons = m.icons.filter((i) => !i.src.endsWith('.svg')).map((i) => ({ ...i, src: i.src.replace('/icons/', '/icons/admin-') }));
+    res.setHeader('Cache-Control', 'no-cache');
+    return res.type('application/manifest+json').send(JSON.stringify(m));
+  }
+  if (/^\/icons\/(icon-|apple-touch-icon)/.test(req.path)) req.url = req.url.replace('/icons/', '/icons/admin-');
+  next();
+});
+
 app.use(
   express.static(path.join(config.root, 'public'), {
     setHeaders(res, file) {
@@ -71,7 +85,8 @@ const meInfo = (req) => {
 
 app.get('/api/me', (req, res) => {
   const user = config.instance ? null : meInfo(req);
-  res.json({ authenticated: Boolean(user), passwordSet: auth.hasPassword(), multiuser: config.multiuser, user });
+  const onAdmin = gateway.isAdminHost(req);
+  res.json({ authenticated: Boolean(user) && (!onAdmin || user.role === 'admin'), passwordSet: auth.hasPassword(), multiuser: config.multiuser, adminHost: onAdmin, user });
 });
 
 app.post(
@@ -79,7 +94,8 @@ app.post(
   wrap(async (req, res) => {
     if (config.instance) throw fail('No encontrado', 404);
     if (!auth.hasPassword()) throw fail('No hay contraseña configurada. Ejecuta: node bin/set-password.js', 409);
-    const username = config.multiuser ? String(req.body?.username || '').trim().toLowerCase() : users.ownerName();
+    const onAdmin = gateway.isAdminHost(req);
+    const username = onAdmin ? users.ownerName() : config.multiuser ? String(req.body?.username || '').trim().toLowerCase() : users.ownerName();
     const keys = [req.ip, `u:${username}`];
     keys.forEach((k) => auth.checkRate(k));
     const user = await users.authenticate(username, req.body?.password);
@@ -207,10 +223,11 @@ router.delete('/skills/:name', wrap(async (req, res) => { skills.remove(String(r
 
 // --- Ajustes ---
 const isAdminReq = (req) => !config.instance || req.headers['x-oc-role'] === 'admin';
-const publicSettings = (admin = !config.instance) => {
+const publicSettings = (admin = !config.instance, adminUrl = '') => {
   const s = store.getSettings();
   return {
     githubTokenSet: Boolean(s.githubToken),
+    adminUrl,
     gitName: s.gitName,
     gitEmail: s.gitEmail,
     ocPermission: config.ocPermission,
@@ -221,7 +238,7 @@ const publicSettings = (admin = !config.instance) => {
   };
 };
 
-router.get('/settings', (req, res) => res.json(publicSettings(isAdminReq(req))));
+router.get('/settings', (req, res) => res.json(publicSettings(isAdminReq(req), String(req.headers['x-oc-admin-url'] || ''))));
 
 router.put(
   '/settings',
@@ -231,7 +248,7 @@ router.put(
     if (typeof gitName === 'string' && gitName.trim()) patch.gitName = gitName.trim().slice(0, 100);
     if (typeof gitEmail === 'string' && /^[^\s@]+@[^\s@]+$/.test(gitEmail.trim())) patch.gitEmail = gitEmail.trim().slice(0, 200);
     store.updateSettings(patch);
-    res.json(publicSettings(isAdminReq(req)));
+    res.json(publicSettings(isAdminReq(req), String(req.headers['x-oc-admin-url'] || '')));
   }),
 );
 

@@ -24,5 +24,7 @@ export const config = {
   instance: Boolean(instanceSecret),
   instanceSecret,
   instanceUser: process.env.INSTANCE_USER || '',
+  // Dominio propio del panel de administración (opcional). En él solo se atiende al administrador y solo lo suyo
+  adminHost: (process.env.ADMIN_HOST || '').trim().toLowerCase(),
   sessionDays: Number(process.env.SESSION_DAYS) || 7,
 };

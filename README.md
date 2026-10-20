@@ -193,6 +193,10 @@ Desde la v0.17.0 el instalador deja el modo aislado activado de fábrica. La app
 - Cada usuario gestiona sus propias claves y su token de GitHub. Las actualizaciones de la app, la salida WireGuard y la actualización de OpenCode las gestiona el administrador.
 - El administrador entra con su usuario (por defecto `admin`) y su contraseña, y trabaja en su espacio como cualquier otro.
 
+### Panel de administración en su propio dominio
+
+El instalador pregunta por un dominio para el panel (por ejemplo `admin.tudominio.com`; su DNS debe apuntar al VPS) o se pasa con `ADMIN_DOMAIN=...`. Ese dominio es **otra app/PWA**: otro nombre («OpenCode Admin»), otro icono (azul) y cookies de sesión separadas. Solo entra el administrador (solo pide contraseña) y solo ve usuarios, salida a internet, actualizaciones y recursos del servidor; no carga proyectos ni el agente. En el dominio de trabajo, esas acciones se rechazan aunque seas administrador, y Ajustes muestra un enlace al panel. Instalaciones existentes: añade `ADMIN_HOST=admin.tudominio.com` a `/etc/opencode-cloud.env`, un bloque `admin.tudominio.com { reverse_proxy 127.0.0.1:3000 }` al Caddyfile, y reinicia `opencode-cloud` y `caddy`. Sin `ADMIN_HOST`, todo sigue como antes, en un solo dominio.
+
 Cómo funciona: cada espacio es un servicio systemd (`opencode-cloud-user@<usuario>`) con su usuario de Linux (`ocu-<usuario>`, uid 61000+), sus datos en `/var/lib/opencode-users/<usuario>` (modo 700) y un servidor que solo acepta peticiones de la pasarela (secreto propio en `/etc/opencode-cloud/instances`, legible solo por ese usuario). Los servicios se endurecen con `ProtectHome`, `ProtectProc=invisible` y `PrivateTmp`. En Caddy, el instalador añade `admin off` para que ningún proceso local pueda reconfigurarlo (los cambios se aplican con `systemctl restart caddy`).
 
 Detalles:
