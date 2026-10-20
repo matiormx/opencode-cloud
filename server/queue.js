@@ -75,8 +75,11 @@ export function dropProject(projectId) {
   persist();
 }
 
+let held = false; // mientras se retoman las conversaciones pausadas por un reinicio, la cola espera
+export const hold = (v) => { held = Boolean(v); };
+
 async function tick() {
-  if (ticking || !data.items.length || drain.active()) return; // con reinicio programado la cola espera
+  if (ticking || held || !data.items.length || drain.active()) return; // con reinicio programado la cola espera
   ticking = true;
   try {
     const projects = store.load('projects', []);

@@ -349,6 +349,18 @@ router.put(
   }),
 );
 
+// Antes de reiniciar o actualizar lo que afecta a todos: se pausa lo que esté trabajando (se retoma solo al volver).
+// Si algún espacio no se puede pausar con seguridad, se cancela todo y se devuelve el motivo.
+async function pauseEveryone() {
+  const p = await restarts.pauseAll();
+  if (p.blocked.length) {
+    await restarts.resumeAll();
+    const who = p.blocked.map((b) => b.name).join(', ');
+    throw fail(`No se pudo pausar a ${who}${p.blocked.some((b) => b.old) ? ' (su espacio tiene una versión anterior y tiene trabajo en curso)' : ''}. No se ha reiniciado nada: usa «Esperar a que estén libres» o inténtalo de nuevo.`, 409);
+  }
+  return p.paused;
+}
+
 // --- Usuarios (solo administrador, modo multiusuario) ---
 // Reinicia el espacio de todos los usuarios (p. ej. para que usen una nueva salida WireGuard)
 router.post(
@@ -358,11 +370,12 @@ router.post(
   wrap(async (req, res) => {
     // when:'idle' → se espera a que ningún espacio esté trabajando (persistente); por defecto, ahora mismo
     if (req.body?.when === 'idle') return res.json({ ok: true, ...(await restarts.schedule('restart-all')) });
-    // Forzar ahora (el administrador es quien responde): si había algo programado, se hace esa misma acción
+    // Pausar y reiniciar ya: si había algo programado, se hace esa misma acción
     const action = restarts.pendingAction() || 'restart-all';
     await restarts.cancel();
-    await instances.request(action);
-    res.json({ ok: true, ...(await restarts.status()) });
+    const paused = await pauseEveryone();
+    try { await instances.request(action); } catch (e) { await restarts.resumeAll(); throw e; }
+    res.json({ ok: true, paused, ...(await restarts.status()) });
   }),
 );
 router.get('/users/restart-status', multiOnly, adminOnly, wrap(async (req, res) => res.json(await restarts.status())));
@@ -1048,8 +1061,100 @@ router.post('/drain', wrap(async (req, res) => {
   drain.set(Boolean(req.body?.on));
   res.json({ ok: true });
 }));
-// Reiniciar el OpenCode de este espacio afecta solo a su dueño: lo decide él (la WebUI avisa si hay algo trabajando)
-router.post('/opencode/restart', wrap(async (req, res) => { await oc.restart(); res.json({ ok: true }); }));
+
+// --- Pausar y retomar: para reiniciar sin perder el hilo ---
+// Se cancela el turno de cada conversación que está trabajando y se apuntan en 'paused'. Al volver OpenCode (o este espacio, si se
+// reinicia entero), se les manda a cada una un mensaje para que revise el estado y continúe. Lo que estuviera a medias (un comando
+// largo, una instalación) se corta: el agente lo comprueba al retomar.
+const RESUME_TEXT = 'El servidor se reinició mientras trabajabas y tu tarea se interrumpió. Revisa el estado actual del proyecto (archivos y comandos que pudieron quedar a medias) y continúa donde lo dejaste.';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const SAFETY_MS = 10 * 60_000; // red de seguridad: si nadie reinicia, se retoma y se libera el bloqueo
+let safetyTimer = null;
+let resuming = false;
+
+// Modelo y agente que usaba la conversación (para retomarla igual); mejor esfuerzo
+async function lastChoice(dir, sessionId) {
+  try {
+    const msgs = await oc.json('GET', `/session/${sessionId}/message`, { directory: dir, query: { limit: 30 } });
+    for (const m of [...(Array.isArray(msgs) ? msgs : [])].reverse()) {
+      const i = m?.info || {};
+      const model = i.model?.providerID && i.model?.modelID ? i.model : i.providerID && i.modelID ? { providerID: i.providerID, modelID: i.modelID } : null;
+      if (model) return { model: { providerID: String(model.providerID), modelID: String(model.modelID) }, agent: typeof i.agent === 'string' ? i.agent : undefined };
+    }
+  } catch { /* sin modelo: se usa el predeterminado */ }
+  return {};
+}
+
+async function pauseSessions() {
+  const sessions = await collectSessions();
+  const projects = loadProjects();
+  const items = [];
+  for (const sx of sessions) {
+    const pr = projects.find((p) => p.id === sx.projectId);
+    if (!pr) continue;
+    const dir = withPath(pr).path;
+    const choice = await lastChoice(dir, sx.sessionId);
+    await oc.json('POST', `/session/${sx.sessionId}/abort`, { directory: dir }).catch(() => null);
+    items.push({ projectId: sx.projectId, sessionId: sx.sessionId, ...choice });
+  }
+  const prev = store.load('paused', { items: [] });
+  const kept = (prev.items || []).filter((i) => !items.some((n) => n.sessionId === i.sessionId));
+  store.save('paused', { at: Date.now(), items: [...kept, ...items] });
+  drain.hold(SAFETY_MS);
+  queue.hold(true);
+  clearTimeout(safetyTimer);
+  safetyTimer = setTimeout(() => resumePaused().catch(() => {}), SAFETY_MS);
+  safetyTimer.unref?.();
+  if (items.length) await sleep(800); // deja que terminen de cancelarse
+  return items.length;
+}
+
+async function resumePaused() {
+  if (resuming) return;
+  resuming = true;
+  clearTimeout(safetyTimer);
+  try {
+    const m = store.load('paused', { items: [] });
+    if (!m.items?.length) return;
+    if (Date.now() - (m.at || 0) > 30 * 60_000) { store.save('paused', { items: [] }); return; } // demasiado antiguo
+    queue.hold(true);
+    for (let i = 0; i < 90; i++) { if ((await oc.health())?.healthy) break; await sleep(1000); }
+    const projects = loadProjects();
+    for (const it of m.items) {
+      const pr = projects.find((p) => p.id === it.projectId);
+      if (!pr) continue;
+      const body = { parts: [{ type: 'text', text: RESUME_TEXT }] };
+      if (it.model) body.model = it.model;
+      if (it.agent) body.agent = it.agent;
+      try { await oc.json('POST', `/session/${it.sessionId}/prompt_async`, { directory: withPath(pr).path, body }); }
+      catch (e) { console.error(`[reanudar] ${it.sessionId}: ${e.message}`); }
+    }
+    store.save('paused', { items: [] });
+  } finally {
+    queue.hold(false);
+    drain.release();
+    resuming = false;
+  }
+}
+// Solo la pasarela las usa (los usuarios no llegan: la pasarela las bloquea)
+router.post('/pause', wrap(async (req, res) => {
+  if (!config.instance) throw fail('No encontrado', 404);
+  res.json({ ok: true, paused: await pauseSessions() });
+}));
+router.post('/resume', wrap(async (req, res) => {
+  if (!config.instance) throw fail('No encontrado', 404);
+  resumePaused().catch(() => {});
+  res.json({ ok: true });
+}));
+
+// Reiniciar el OpenCode de este espacio afecta solo a su dueño: lo decide él. Con pause:true se pausan sus conversaciones
+// antes y se retoman solas después.
+router.post('/opencode/restart', wrap(async (req, res) => {
+  const paused = req.body?.pause === true ? await pauseSessions() : 0;
+  await oc.restart();
+  if (req.body?.pause === true) resumePaused().catch(() => {}); // retoma lo pausado y libera el bloqueo
+  res.json({ ok: true, paused });
+}));
 router.post(
   '/opencode/upgrade',
   notInstance,
@@ -1059,8 +1164,10 @@ router.post(
       // when:'idle' → se programa: nadie inicia tareas nuevas y se actualiza cuando todos estén libres
       if (req.body?.when === 'idle') return res.json({ ok: true, scheduled: true, ...(await restarts.schedule('upgrade-opencode')) });
       await restarts.cancel();
-      const r = await instances.request('upgrade-opencode');
-      return res.json({ ok: true, output: r.message || 'OpenCode actualizado' });
+      const paused = await pauseEveryone();
+      let r;
+      try { r = await instances.request('upgrade-opencode'); } catch (e) { await restarts.resumeAll(); throw e; }
+      return res.json({ ok: true, paused, output: r.message || 'OpenCode actualizado' });
     }
     const output = await oc.upgrade();
     await oc.restart();
@@ -1073,11 +1180,20 @@ router.get('/update/status', wrap(async (req, res) => res.json(req.query.refresh
 // Tras actualizar el código, los espacios de los usuarios también se reinician para usar la versión nueva
 // when:'idle' → la app se actualiza ya, pero los espacios (que siguen con el código anterior) se reinician cuando todos estén libres
 router.post('/update/apply', notInstance, wrap(async (req, res) => {
-  const r = await updater.apply();
-  if (config.multiuser) { if (req.body?.when === 'idle') await restarts.schedule('restart-all'); else instances.fire('restart-all'); }
-  res.json(r);
+  const idle = config.multiuser && req.body?.when === 'idle';
+  const paused = config.multiuser && !idle ? await pauseEveryone() : 0; // «ahora»: se pausa lo que esté trabajando y se retoma al volver
+  let r;
+  try { r = await updater.apply(); } catch (e) { if (paused) await restarts.resumeAll(); throw e; }
+  if (config.multiuser) { if (idle) await restarts.schedule('restart-all'); else instances.fire('restart-all'); }
+  res.json({ ...r, paused });
 }));
-router.post('/update/rollback', notInstance, wrap(async (req, res) => { const r = await updater.rollback(); if (config.multiuser) instances.fire('restart-all'); res.json(r); }));
+router.post('/update/rollback', notInstance, wrap(async (req, res) => {
+  const paused = config.multiuser ? await pauseEveryone() : 0;
+  let r;
+  try { r = await updater.rollback(); } catch (e) { if (paused) await restarts.resumeAll(); throw e; }
+  if (config.multiuser) instances.fire('restart-all');
+  res.json({ ...r, paused });
+}));
 
 // ---------- Errores ----------
 app.use('/api', (req, res) => res.status(404).json({ error: 'No encontrado' }));
@@ -1093,6 +1209,8 @@ app.use((err, req, res, next) => {
 const gatewayOnly = config.multiuser && !config.instance;
 if (!gatewayOnly) oc.start();
 if (gatewayOnly) restarts.resume();
+// Si este espacio se reinició con conversaciones pausadas, se retoman al volver OpenCode
+if (!gatewayOnly) { if (store.load('paused', { items: [] }).items?.length) queue.hold(true); resumePaused().catch((e) => console.error('[reanudar]', e.message)); }
 if (!config.instance) updater.startPeriodicCheck();
 if (!gatewayOnly) queue.start();
 sysmon.start();

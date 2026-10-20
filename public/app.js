@@ -844,6 +844,18 @@ async function loadMaint() {
   } catch { /* se reintenta en el siguiente ciclo */ }
 }
 
+// Antes de un reinicio que pausa y retoma: avisa de lo que se va a pausar (no hace falta esperar a que esté libre)
+async function confirmPause(question) {
+  let busy = [];
+  let others = [];
+  try { ({ busy = [], others = [] } = await api('GET', '/api/activity?fresh=1')); } catch { /* sin datos: se pregunta lo normal */ }
+  const who = others.filter((o) => o.busy).map((o) => `${o.name} (${o.busy})`).join(', ');
+  if (!who && !busy.length) return confirm(question);
+  const lead = who ? `Ahora trabajan: ${who}.` : `Hay ${busy.length} conversación${busy.length > 1 ? 'es' : ''} trabajando.`;
+  return confirm(`${lead}\n\nSe pausarán, se hará el reinicio y se retomarán solas al volver. Lo que estuviera a medias (un comando largo, una instalación) se corta y el agente lo revisa al retomar.\n\n${question}`);
+}
+const confirmGlobal = (q) => (state.multiuser ? confirmPause(q) : confirmInterrupt(q));
+
 function sessionMenuModal(projectId, sessionId) {
   const proj = state.projects.find((x) => x.id === projectId);
   const known = [...(state.featured.pinned || []), ...(state.featured.recent || [])].find((x) => x.projectId === projectId && x.id === sessionId)
@@ -2286,12 +2298,12 @@ async function settingsModal(section, { admin = false } = {}) {
       afterRestart(r, `Actualizado a ${r.to}. Los espacios se reiniciarán cuando estén libres`, m);
     });
     click('#upd-apply', async (b) => {
-      if (!(await confirmInterrupt('Se descargará la nueva versión y la aplicación se reiniciará unos segundos. ¿Continuar?'))) return;
+      if (!(await confirmGlobal('Se descargará la nueva versión y la aplicación se reiniciará unos segundos. ¿Continuar?'))) return;
       const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/update/apply'));
       afterRestart(r, `Actualizado a ${r.to}`, m);
     });
     click('#upd-rollback', async (b) => {
-      if (!(await confirmInterrupt('¿Volver a la versión anterior a la última actualización?'))) return;
+      if (!(await confirmGlobal('¿Volver a la versión anterior a la última actualización?'))) return;
       const r = await busyBtn(b, 'Restaurando…', () => api('POST', '/api/update/rollback'));
       afterRestart(r, `Restaurada la versión ${r.to}`, m);
     });
@@ -2310,8 +2322,8 @@ async function settingsModal(section, { admin = false } = {}) {
   const egRefresh = async () => { eg = await api('GET', '/api/egress?force=1').catch(() => eg); $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); };
   // En el panel no hay OpenCode propio: lo que se reinicia son los espacios de los usuarios
   const spacesRestart = async (question) => {
-    if (!(await confirmInterrupt(question || 'Se forzará el reinicio de los espacios de todos los usuarios; lo que estén haciendo se interrumpe y no se reanuda solo. ¿Continuar?'))) return false;
-    await api('POST', '/api/users/restart-all'); toast('Espacios reiniciados'); return true;
+    if (!(await confirmPause(question || 'Se reiniciarán los espacios de todos los usuarios. ¿Continuar?'))) return false;
+    const r = await api('POST', '/api/users/restart-all'); toast(r.paused ? `Espacios reiniciados · ${r.paused} conversación${r.paused > 1 ? 'es' : ''} pausada${r.paused > 1 ? 's' : ''}, se retoman solas` : 'Espacios reiniciados'); return true;
   };
   // Reinicio de espacios: programado (nadie inicia tareas nuevas y se reinicia al quedar todos libres) o ahora (avisa de quién está ocupado)
   let rs = { pending: false, busy: [] };
@@ -2321,14 +2333,14 @@ async function settingsModal(section, { admin = false } = {}) {
   const rsBanner = () => {
     const who = rsWho();
     const what = rs.action === 'upgrade-opencode' ? 'Actualización de OpenCode programada.' : 'Reinicio programado.';
-    return `<div class="banner" style="margin:0 0 10px"><strong>${what}</strong> Nadie puede iniciar tareas nuevas hasta que termine. Se hará solo cuando todos estén libres.${rs.unknown ? ' Algún espacio no responde a la consulta de actividad.' : ''}</div>${who ? `<p style="margin:0 0 10px"><span class="chip warn">Ocupados</span> ${who}</p>` : '<p class="muted" style="margin:0 0 10px">Ya no hay nadie trabajando: se aplicará en unos segundos.</p>'}${rsWaiting()}<div class="row wrap"><button class="btn small" type="button" data-rs="cancel">Cancelar</button><button class="btn small danger" type="button" data-rs="now">Forzar ahora</button></div>`;
+    return `<div class="banner" style="margin:0 0 10px"><strong>${what}</strong> Nadie puede iniciar tareas nuevas hasta que termine. Se hará solo cuando todos estén libres.${rs.unknown ? ' Algún espacio no responde a la consulta de actividad.' : ''}</div>${who ? `<p style="margin:0 0 10px"><span class="chip warn">Ocupados</span> ${who}</p>` : '<p class="muted" style="margin:0 0 10px">Ya no hay nadie trabajando: se aplicará en unos segundos.</p>'}${rsWaiting()}<div class="row wrap"><button class="btn small" type="button" data-rs="cancel">Cancelar la espera</button><button class="btn small primary" type="button" data-rs="now">Pausar y aplicar ya</button></div>`;
   };
   const rsHtml = (onlyPending) => {
     if (rs.pending) return rsBanner();
     if (onlyPending) return '';
     const who = rsWho();
     const busyLine = who ? `<p style="margin:0 0 10px"><span class="chip warn">Ocupados</span> ${who}</p>` : '<p class="muted" style="margin:0 0 10px">Ahora mismo nadie está trabajando.</p>';
-    return `${busyLine}${rsWaiting()}<div class="row wrap"><button class="btn small primary" type="button" data-rs="idle">Programar reinicio</button><button class="btn small danger" type="button" data-rs="now">Forzar ahora</button></div><p class="muted" style="font-size:12.5px;margin:8px 0 0">«Programar» bloquea las tareas nuevas de todos, deja terminar las que están en curso y reinicia en cuanto todos estén libres. «Forzar» reinicia ya e interrumpe lo que estén haciendo.</p>`;
+    return `${busyLine}${rsWaiting()}<div class="row wrap"><button class="btn small primary" type="button" data-rs="now">Pausar y reiniciar</button><button class="btn small" type="button" data-rs="idle">Esperar a que estén libres</button></div><p class="muted" style="font-size:12.5px;margin:8px 0 0">«Pausar y reiniciar» cancela lo que esté trabajando, reinicia y cada conversación se retoma sola al volver (un comando largo a medias se corta). «Esperar» bloquea las tareas nuevas, deja terminar las que están en curso y reinicia en cuanto todos estén libres.</p>`;
   };
   const drawRs = () => {
     m.el.querySelectorAll('.rs-slot').forEach((el) => { el.innerHTML = rsHtml(el.dataset.only === 'pending'); });
@@ -2403,8 +2415,8 @@ async function settingsModal(section, { admin = false } = {}) {
     toast(r.message || okMsg);
     if (admin) {
       if (confirm('Para que los espacios usen la nueva salida hay que reiniciarlos.\n\nAceptar: programar el reinicio (nadie podrá iniciar tareas nuevas; se reinicia cuando todos estén libres).\nCancelar: lo haré yo después con los botones de esta pantalla.')) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Reinicio programado: nadie puede iniciar tareas nuevas'); }
-    } else if (await confirmInterrupt('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?')) {
-      await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); await loadModels(); renderModels();
+    } else if (await confirmPause('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?')) {
+      await api('POST', '/api/opencode/restart', { pause: true }); toast('OpenCode reiniciado'); await loadModels(); renderModels();
     }
     egRefresh();
   };
@@ -2426,10 +2438,10 @@ async function settingsModal(section, { admin = false } = {}) {
     q('#eg-conf')?.addEventListener('input', (e) => { egDraft = e.target.value; });
     click('#eg-reconnect', async (b) => { const r = await busyBtn(b, 'Reconectando…', () => api('POST', '/api/egress/action', { action: 'reconnect' })); eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message || 'Hecho', r.ok ? undefined : 'err'); egRefresh(); });
     click('#eg-on', async (b) => egAfter(await busyBtn(b, 'Activando…', () => api('POST', '/api/egress/action', { action: 'on' })), 'Túnel activado'));
-    click('#eg-off', async (b) => { if (!(admin ? confirm('Se desactivará el túnel y se programará el reinicio de los espacios: nadie podrá iniciar tareas nuevas hasta que todos estén libres y se reinicien. ¿Continuar?') : await confirmInterrupt('Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
+    click('#eg-off', async (b) => { if (!(admin ? confirm('Se desactivará el túnel y se programará el reinicio de los espacios: nadie podrá iniciar tareas nuevas hasta que todos estén libres y se reinicien. ¿Continuar?') : await confirmPause('Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
       const r = await busyBtn(b, 'Desactivando…', () => api('POST', '/api/egress/action', { action: 'off' }));
       eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message);
-      if (admin) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Reinicio programado: nadie puede iniciar tareas nuevas'); } else { await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); }
+      if (admin) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Reinicio programado: nadie puede iniciar tareas nuevas'); } else { await api('POST', '/api/opencode/restart', { pause: true }); toast('OpenCode reiniciado'); }
       egRefresh(); });
     click('#eg-remove', async (b) => { if (!confirm('¿Quitar la configuración de WireGuard del VPS?')) return;
       const r = await busyBtn(b, 'Quitando…', () => api('POST', '/api/egress/action', { action: 'remove' }));
@@ -2533,8 +2545,8 @@ async function settingsModal(section, { admin = false } = {}) {
     renderModels();
     m.remove(); settingsModal('ia');
   });
-  click('#oc-restart', async (b) => { if (!(await confirmInterrupt('Se reiniciará OpenCode. ¿Continuar?'))) return; await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart')); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
-  click('#oc-upgrade', async (b) => { if (!(await confirmInterrupt('Se actualizará OpenCode y se reiniciará. ¿Continuar?'))) return; const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });
+  click('#oc-restart', async (b) => { if (!(await confirmPause('Se reiniciará OpenCode. ¿Continuar?'))) return; await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart', { pause: true })); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
+  click('#oc-upgrade', async (b) => { if (!(await confirmGlobal('Se actualizará OpenCode y se reiniciará. ¿Continuar?'))) return; const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });
   click('#oc-upgrade-idle', async (b) => {
     if (!confirm('Se programará la actualización de OpenCode: nadie podrá iniciar tareas nuevas, las que están en curso terminan con normalidad y, en cuanto todos estén libres, se actualiza OpenCode y se reinician los espacios.\n\n¿Programar?')) return;
     rs = await busyBtn(b, 'Programando…', () => api('POST', '/api/opencode/upgrade', { when: 'idle' }));
@@ -2683,8 +2695,8 @@ async function settingsModal(section, { admin = false } = {}) {
     const act = b.dataset.x;
     try {
       if (act === 'apply') {
-        if (!(await confirmInterrupt('Se reiniciará OpenCode para aplicar los cambios. ¿Continuar?'))) return;
-        await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart'));
+        if (!(await confirmPause('Se reiniciará OpenCode para aplicar los cambios. ¿Continuar?'))) return;
+        await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart', { pause: true }));
         await new Promise((r) => setTimeout(r, 2500)); // OpenCode tarda un momento en cargar los servidores MCP
         await loadExt(true);
         toast('Extensiones aplicadas');

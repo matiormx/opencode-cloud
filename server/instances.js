@@ -124,17 +124,25 @@ export async function activity(name, fresh = false) {
 
 // Pide a la instancia de un usuario que bloquee (o libere) las tareas nuevas por un reinicio programado.
 // La instancia lo da por caducado a los 45 s si no se renueva, así que si la pasarela cae no queda bloqueada.
-export function setDrain(name, on) {
+function post(name, path, payload = {}, timeout = 2500) {
   const k = keys(name);
-  if (!k) return Promise.resolve(false);
-  const body = JSON.stringify({ on: Boolean(on) });
+  if (!k) return Promise.resolve({ status: 0, json: null });
+  const body = JSON.stringify(payload);
   return new Promise((resolve) => {
     const rq = http.request({
-      host: '127.0.0.1', port: k.port, path: '/api/drain', method: 'POST', timeout: 2500,
+      host: '127.0.0.1', port: k.port, path, method: 'POST', timeout,
       headers: { 'x-oc-gateway': k.secret, 'x-oc-user': name, 'x-requested-with': 'occloud', 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
-    }, (r) => { r.resume(); resolve(r.statusCode === 200); });
+    }, (r) => {
+      let b = ''; r.setEncoding('utf8'); r.on('data', (d) => { if (b.length < 100000) b += d; });
+      r.on('end', () => { let json = null; try { json = JSON.parse(b); } catch { /* sin cuerpo */ } resolve({ status: r.statusCode || 0, json }); });
+    });
     rq.on('timeout', () => rq.destroy());
-    rq.on('error', () => resolve(false));
+    rq.on('error', () => resolve({ status: 0, json: null }));
     rq.end(body);
   });
 }
+export async function setDrain(name, on) { return (await post(name, '/api/drain', { on: Boolean(on) })).status === 200; }
+// Pausa lo que esté trabajando en el espacio (cancela cada turno y apunta qué conversaciones eran) y bloquea tareas nuevas.
+// status 404 = espacio con una versión anterior, que no sabe pausar.
+export const pause = (name) => post(name, '/api/pause', {}, 30_000);
+export const resume = (name) => post(name, '/api/resume', {}, 5000);

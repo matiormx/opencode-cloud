@@ -103,3 +103,25 @@ export async function status() {
 export function resume() {
   if (pending) startTimer();
 }
+
+// Pausa el trabajo de todos los espacios para poder reiniciar sin esperar: cada espacio cancela el turno de sus conversaciones,
+// apunta cuáles eran y, al volver tras el reinicio, las retoma solo. Si un espacio no puede pausarse con seguridad
+// (no responde, o es de una versión anterior y tiene trabajo en curso) se devuelve en 'blocked' y no se debe reiniciar.
+export async function pauseAll() {
+  const rows = await Promise.all(activeUsers().map(async (u) => {
+    if (!(await instances.probe(u.name))) return { name: u.name, paused: 0, blocked: false };
+    const r = await instances.pause(u.name);
+    if (r.status === 200 && r.json?.ok) return { name: u.name, paused: r.json.paused || 0, blocked: false };
+    if (r.status === 404) { // versión anterior: solo es seguro si no tiene nada trabajando
+      const a = await instances.activity(u.name, true);
+      return { name: u.name, paused: 0, blocked: !a || Boolean(a.working), old: true };
+    }
+    return { name: u.name, paused: 0, blocked: true };
+  }));
+  return { paused: rows.reduce((n, r) => n + r.paused, 0), blocked: rows.filter((r) => r.blocked) };
+}
+
+// Si no se llega a reiniciar, los espacios retoman lo pausado
+export async function resumeAll() {
+  await Promise.all(activeUsers().map((u) => instances.resume(u.name).catch(() => null)));
+}

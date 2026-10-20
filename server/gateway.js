@@ -42,7 +42,7 @@ export function proxy(req, res, next) {
     return res.status(401).json({ error: 'No autenticado' });
   }
   if (LOCAL.has(req.path)) return next();
-  if (req.path === '/drain') return res.status(404).json({ error: 'No encontrado' }); // solo la pasarela lo usa, hacia la instancia
+  if (['/drain', '/pause', '/resume'].includes(req.path)) return res.status(404).json({ error: 'No encontrado' }); // solo la pasarela lo usa, hacia la instancia
   if (isAdminOnly(req.path)) return res.status(403).json({ error: 'Solo el administrador puede hacer eso (desde /admin/)' });
 
   seen.set(name, Date.now());
@@ -78,7 +78,7 @@ export function proxy(req, res, next) {
 
 // Actividad para el administrador: la de los espacios de los usuarios (él no tiene espacio propio)
 function adminActivity(req, res) {
-  Promise.all(users.list().filter((u) => u.role !== 'admin' && !u.disabled).map(async (u) => ({ name: u.name, ...((await instances.activity(u.name)) || {}) })))
+  Promise.all(users.list().filter((u) => u.role !== 'admin' && !u.disabled).map(async (u) => ({ name: u.name, ...((await instances.activity(u.name, req.query.fresh === '1')) || {}) })))
     .then((rows) => res.json({ busy: [], sessions: [], queued: 0, requests: null, others: rows.filter((r) => r.busy || r.queued) }))
     .catch(() => res.json({ busy: [], sessions: [], queued: 0, requests: null, others: [] }));
 }
