@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { config } from './config.js';
 import * as oc from './opencode.js';
+import * as drain from './drain.js';
 import * as store from './store.js';
 
 const MAX_ITEMS = 20;
@@ -75,7 +76,7 @@ export function dropProject(projectId) {
 }
 
 async function tick() {
-  if (ticking || !data.items.length) return;
+  if (ticking || !data.items.length || drain.active()) return; // con reinicio programado la cola espera
   ticking = true;
   try {
     const projects = store.load('projects', []);

@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import express from 'express';
 import * as auth from './auth.js';
 import { config } from './config.js';
+import * as drain from './drain.js';
 import * as egress from './egress.js';
 import * as ext from './extensions.js';
 import * as git from './git.js';
@@ -158,44 +159,50 @@ const adminOnly = (req, res, next) => (req.sessionUser === '' ? next() : next(fa
 const multiOnly = (req, res, next) => (config.multiuser ? next() : next(fail('El modo multiusuario no está activado', 404)));
 
 // --- Trabajo en curso: qué conversaciones están trabajando, esperando al proveedor o pendientes de permiso ---
+// Conversaciones de este espacio que están trabajando, esperando al proveedor o pendientes de permiso/respuesta
+async function collectSessions() {
+  const sessions = [];
+  await Promise.all(
+    loadProjects().map(async (pr) => {
+      const dir = withPath(pr).path;
+      try {
+        const [st, perms, asks] = await Promise.all([
+          oc.json('GET', '/session/status', { directory: dir }),
+          oc.json('GET', '/permission', { directory: dir }).catch(() => []),
+          oc.json('GET', '/question', { directory: dir }).catch(() => []),
+        ]);
+        const pending = new Set((Array.isArray(perms) ? perms : []).map((x) => x.sessionID));
+        const asking = new Set((Array.isArray(asks) ? asks : []).map((x) => x.sessionID));
+        const ids = new Set([...Object.keys(st || {}).filter((k) => st[k] && st[k].type !== 'idle'), ...pending, ...asking]);
+        if (!ids.size) return;
+        let titles = new Map();
+        try {
+          const list = await oc.json('GET', '/session', { directory: dir });
+          titles = new Map((Array.isArray(list) ? list : []).map((x) => [x.id, x.title || '']));
+        } catch { /* sin títulos */ }
+        for (const id of ids) {
+          const v = st?.[id];
+          const row = { projectId: pr.id, projectName: pr.name, sessionId: id, title: titles.get(id) || '', state: 'working' };
+          if (pending.has(id)) row.state = 'permission';
+          else if (asking.has(id)) row.state = 'question';
+          else if (v?.type === 'retry') {
+            const next = Number(v.next) || 0;
+            const nextAt = next > 1e11 ? next : next ? Date.now() + next : 0;
+            row.state = 'retrying';
+            row.retry = { attempt: v.attempt || 0, message: String(v.message || '').slice(0, 300), inSec: nextAt ? Math.max(0, Math.round((nextAt - Date.now()) / 1000)) : null };
+          }
+          sessions.push(row);
+        }
+      } catch { /* OpenCode no responde: no hay nada que interrumpir */ }
+    }),
+  );
+  return sessions;
+}
+
 router.get(
   '/activity',
   wrap(async (req, res) => {
-    const sessions = [];
-    await Promise.all(
-      loadProjects().map(async (pr) => {
-        const dir = withPath(pr).path;
-        try {
-          const [st, perms, asks] = await Promise.all([
-            oc.json('GET', '/session/status', { directory: dir }),
-            oc.json('GET', '/permission', { directory: dir }).catch(() => []),
-            oc.json('GET', '/question', { directory: dir }).catch(() => []),
-          ]);
-          const pending = new Set((Array.isArray(perms) ? perms : []).map((x) => x.sessionID));
-          const asking = new Set((Array.isArray(asks) ? asks : []).map((x) => x.sessionID));
-          const ids = new Set([...Object.keys(st || {}).filter((k) => st[k] && st[k].type !== 'idle'), ...pending, ...asking]);
-          if (!ids.size) return;
-          let titles = new Map();
-          try {
-            const list = await oc.json('GET', '/session', { directory: dir });
-            titles = new Map((Array.isArray(list) ? list : []).map((x) => [x.id, x.title || '']));
-          } catch { /* sin títulos */ }
-          for (const id of ids) {
-            const v = st?.[id];
-            const row = { projectId: pr.id, projectName: pr.name, sessionId: id, title: titles.get(id) || '', state: 'working' };
-            if (pending.has(id)) row.state = 'permission';
-            else if (asking.has(id)) row.state = 'question';
-            else if (v?.type === 'retry') {
-              const next = Number(v.next) || 0;
-              const nextAt = next > 1e11 ? next : next ? Date.now() + next : 0;
-              row.state = 'retrying';
-              row.retry = { attempt: v.attempt || 0, message: String(v.message || '').slice(0, 300), inSec: nextAt ? Math.max(0, Math.round((nextAt - Date.now()) / 1000)) : null };
-            }
-            sessions.push(row);
-          }
-        } catch { /* OpenCode no responde: no hay nada que interrumpir */ }
-      }),
-    );
+    const sessions = await collectSessions();
     // En modo multiusuario, el administrador también ve si los espacios de los demás están trabajando
     let others = [];
     if (config.multiuser && req.sessionUser === '') {
@@ -350,14 +357,14 @@ router.post(
   adminOnly,
   wrap(async (req, res) => {
     // when:'idle' → se espera a que ningún espacio esté trabajando (persistente); por defecto, ahora mismo
-    if (req.body?.when === 'idle') return res.json({ ok: true, ...restarts.schedule() });
-    restarts.cancel();
+    if (req.body?.when === 'idle') return res.json({ ok: true, ...(await restarts.schedule()) });
+    await restarts.cancel();
     await instances.request('restart-all');
-    res.json({ ok: true, ...restarts.status() });
+    res.json({ ok: true, ...(await restarts.status()) });
   }),
 );
-router.get('/users/restart-status', multiOnly, adminOnly, wrap(async (req, res) => res.json(restarts.status())));
-router.post('/users/restart-cancel', multiOnly, adminOnly, wrap(async (req, res) => res.json(restarts.cancel())));
+router.get('/users/restart-status', multiOnly, adminOnly, wrap(async (req, res) => res.json(await restarts.status())));
+router.post('/users/restart-cancel', multiOnly, adminOnly, wrap(async (req, res) => res.json(await restarts.cancel())));
 // El administrador puede entrar en el espacio de un usuario sin su contraseña (sesión de trabajo corta, queda en el registro)
 router.post(
   '/users/:name/enter',
@@ -830,6 +837,7 @@ router.get('/projects/:id/sessions/:sid/queue', wrap(async (req, res) => { const
 router.post(
   '/projects/:id/sessions/:sid/queue',
   wrap(async (req, res) => {
+    if (drain.active()) throw fail(drain.MSG, 423);
     const p = getProject(req);
     res.json(queue.add(p.id, sid(req), req.body?.text, req.body?.model));
   }),
@@ -862,6 +870,7 @@ function parseImages(list) {
 router.post(
   '/projects/:id/sessions/:sid/send',
   wrap(async (req, res) => {
+    if (drain.active()) throw fail(drain.MSG, 423);
     const p = getProject(req);
     const text = String(req.body?.text || '');
     const imgs = parseImages(req.body?.images);
@@ -1029,7 +1038,43 @@ router.get(
     res.json({ running: oc.isRunning(), healthy: Boolean(h?.healthy), version: h?.version || null, logs: oc.logs() });
   }),
 );
-router.post('/opencode/restart', wrap(async (req, res) => { await oc.restart(); res.json({ ok: true }); }));
+// Estado del bloqueo de tareas nuevas por reinicio programado (lo consulta la WebUI para avisar)
+router.get('/maintenance', wrap(async (req, res) => res.json(drain.info())));
+// La pasarela pide bloquear (o liberar) las tareas nuevas de este espacio. Solo desde la pasarela: los usuarios no llegan aquí.
+router.post('/drain', wrap(async (req, res) => {
+  if (!config.instance) throw fail('No encontrado', 404);
+  drain.setGlobal(Boolean(req.body?.on), req.body?.deadline);
+  res.json({ ok: true });
+}));
+
+// Reiniciar OpenCode. Con when:'idle' no se interrumpe nada: se bloquean las tareas nuevas de este espacio, se espera a que
+// terminen las conversaciones en curso y entonces se reinicia (si no hay ninguna, al momento).
+const SELF_WAIT_MS = 30 * 60_000;
+let selfTimer = null;
+let selfStreak = 0;
+const stopSelfWait = () => { clearInterval(selfTimer); selfTimer = null; selfStreak = 0; drain.setMine(null); };
+async function selfTick() {
+  try {
+    const mine = drain.getMine();
+    if (!mine) return stopSelfWait();
+    const busy = (await collectSessions()).length;
+    selfStreak = busy ? 0 : selfStreak + 1;
+    if (selfStreak >= 2 || Date.now() > mine.deadline) { await oc.restart(); stopSelfWait(); }
+  } catch (err) { console.error('[reinicio]', err.message); }
+}
+router.post('/opencode/restart', wrap(async (req, res) => {
+  if (req.body?.when !== 'idle') { await oc.restart(); return res.json({ ok: true, restarted: true }); }
+  const busy = (await collectSessions()).length;
+  if (!busy) { await oc.restart(); return res.json({ ok: true, restarted: true, busy: 0 }); }
+  if (!drain.getMine()) {
+    drain.setMine({ deadline: Date.now() + SELF_WAIT_MS });
+    selfStreak = 0;
+    selfTimer = setInterval(selfTick, 4000);
+    selfTimer.unref?.();
+  }
+  res.json({ ok: true, restarted: false, busy, ...drain.info() });
+}));
+router.post('/opencode/restart-cancel', wrap(async (req, res) => { stopSelfWait(); res.json({ ok: true, ...drain.info() }); }));
 router.post(
   '/opencode/upgrade',
   notInstance,

@@ -42,6 +42,7 @@ export function proxy(req, res, next) {
     return res.status(401).json({ error: 'No autenticado' });
   }
   if (LOCAL.has(req.path)) return next();
+  if (req.path === '/drain') return res.status(404).json({ error: 'No encontrado' }); // solo la pasarela lo usa, hacia la instancia
   if (isAdminOnly(req.path)) return res.status(403).json({ error: 'Solo el administrador puede hacer eso (desde /admin/)' });
 
   seen.set(name, Date.now());

@@ -101,9 +101,9 @@ export function nudge(name) {
 // Trabajo en curso en el espacio de un usuario (conversaciones de OpenCode trabajando y mensajes en cola).
 // Se pregunta a su propia instancia; caché corta para no saturar cuando la WebUI consulta a menudo.
 const actCache = new Map();
-export async function activity(name) {
+export async function activity(name, fresh = false) {
   const c = actCache.get(name);
-  if (c && Date.now() - c.at < 8000) return c.v;
+  if (!fresh && c && Date.now() - c.at < 8000) return c.v;
   const k = keys(name);
   let v = null;
   if (k) {
@@ -117,4 +117,21 @@ export async function activity(name) {
   }
   actCache.set(name, { at: Date.now(), v });
   return v;
+}
+
+// Pide a la instancia de un usuario que bloquee (o libere) las tareas nuevas por un reinicio programado.
+// La instancia lo da por caducado a los 45 s si no se renueva, así que si la pasarela cae no queda bloqueada.
+export function setDrain(name, on, deadline = 0) {
+  const k = keys(name);
+  if (!k) return Promise.resolve(false);
+  const body = JSON.stringify({ on: Boolean(on), deadline });
+  return new Promise((resolve) => {
+    const rq = http.request({
+      host: '127.0.0.1', port: k.port, path: '/api/drain', method: 'POST', timeout: 2500,
+      headers: { 'x-oc-gateway': k.secret, 'x-oc-user': name, 'x-requested-with': 'occloud', 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+    }, (r) => { r.resume(); resolve(r.statusCode === 200); });
+    rq.on('timeout', () => rq.destroy());
+    rq.on('error', () => resolve(false));
+    rq.end(body);
+  });
 }

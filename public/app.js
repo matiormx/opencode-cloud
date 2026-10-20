@@ -454,6 +454,7 @@ async function mountApp() {
     setInterval(() => { if (!document.hidden && $('#sysmon-slot')) loadActivity(); }, 5000);
     setInterval(() => { if (!document.hidden && state.act) { const slot = $('#sysmon-slot'); if (slot) slot.innerHTML = sysCardHtml(); renderWait(); } }, 1000);
     setInterval(() => { if (state.queue.items.length) loadQueue(); }, 4000);
+    setInterval(() => { if (state.multiuser && !document.hidden && $('#wait')) loadMaint(); }, 8000);
     setInterval(() => { if ($('#sidebar')) loadUpdate(false); }, 10 * 60_000);
   }
 }
@@ -606,6 +607,12 @@ function renderWait() {
       const pat = [].concat(first.pattern || first.patterns || [])[0];
       box.innerHTML = `<div class="wait-perm" data-pid="${esc(first.id)}"><div><span class="wait-ico" aria-hidden="true">🔒</span> <strong>OpenCode pide permiso</strong> · ${esc(what)}${state.perms.size > 1 ? ` <span class="muted">(+${state.perms.size - 1} más)</span>` : ''}</div>${pat ? `<code class="wait-pat">${esc(String(pat).slice(0, 140))}</code>` : ''}<div class="row wait-btns"><button class="btn small primary" data-act="perm" data-r="once">Permitir una vez</button><button class="btn small" data-act="perm" data-r="always">Siempre</button><button class="btn small danger" data-act="perm" data-r="reject">Rechazar</button></div></div>`;
     }
+    box.classList.remove('hidden');
+  } else if (state.maint?.pending) {
+    const until = state.maint.deadline ? ` (como máximo a las ${new Date(state.maint.deadline).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })})` : '';
+    box.innerHTML = state.maint.kind === 'self'
+      ? `<span class="wait-ico" aria-hidden="true">🔄</span><span><strong>Reinicio en espera.</strong> OpenCode se reiniciará cuando terminen tus conversaciones${until}. No puedes iniciar tareas nuevas hasta entonces. <button class="btn small" data-act="maint-cancel">Cancelar</button></span>`
+      : `<span class="wait-ico" aria-hidden="true">🔄</span><span><strong>Reinicio programado por el administrador.</strong> No se pueden iniciar tareas nuevas hasta que termine; las que están en curso siguen${until}.</span>`;
     box.classList.remove('hidden');
   } else {
     box.classList.add('hidden');
@@ -830,6 +837,46 @@ async function confirmInterrupt(question) {
   if (!busy.length) return confirm(question);
   const names = [...new Set(busy.map((b) => b.projectName))].join(', ');
   return confirm(`OpenCode está trabajando ahora mismo (${busy.length} conversación${busy.length > 1 ? 'es' : ''}: ${names}).\n\nSi continúas, esa tarea se interrumpirá y no se reanuda sola${queued ? ' (los mensajes en cola sí se enviarán después)' : ''}.\n\n¿Continuar de todos modos?`);
+}
+
+// Reiniciar el OpenCode de este usuario. En modo multiusuario NO interrumpe nada: si hay conversaciones trabajando se espera a que
+// terminen (mientras tanto no se pueden iniciar tareas nuevas) y entonces se reinicia solo.
+// Devuelve true si ya se reinició, 'waiting' si queda en espera (after() se ejecuta al reiniciarse) y false si se canceló.
+let maintWatch = null;
+async function restartOpenCode(question, after) {
+  if (!state.multiuser) {
+    if (!(await confirmInterrupt(question))) return false;
+    await api('POST', '/api/opencode/restart');
+    return true;
+  }
+  let busy = 0;
+  try { busy = (await api('GET', '/api/activity')).busy?.length || 0; } catch { /* sin datos */ }
+  const ok = busy
+    ? confirm(`Hay ${busy} conversación${busy > 1 ? 'es' : ''} trabajando. No se interrumpen: OpenCode se reiniciará cuando terminen y, mientras tanto, no podrás iniciar tareas nuevas.\n\n¿Continuar?`)
+    : confirm(question);
+  if (!ok) return false;
+  const r = await api('POST', '/api/opencode/restart', { when: 'idle' });
+  if (r.restarted) return true;
+  state.maintCancel = false;
+  state.maint = { pending: true, kind: 'self', deadline: r.deadline };
+  renderWait();
+  toast('Se reiniciará cuando terminen tus conversaciones');
+  clearInterval(maintWatch);
+  maintWatch = setInterval(async () => {
+    const mt = await api('GET', '/api/maintenance').catch(() => null);
+    if (!mt) return;
+    state.maint = mt; renderWait();
+    if (mt.pending) return;
+    clearInterval(maintWatch); maintWatch = null;
+    if (!state.maintCancel) { toast('OpenCode reiniciado'); try { await after?.(); } catch { /* sin más */ } }
+  }, 4000);
+  return 'waiting';
+}
+async function loadMaint() {
+  try {
+    const mt = await api('GET', '/api/maintenance');
+    if (JSON.stringify(mt) !== JSON.stringify(state.maint)) { state.maint = mt; renderWait(); }
+  } catch { /* se reintenta en el siguiente ciclo */ }
 }
 
 function sessionMenuModal(projectId, sessionId) {
@@ -2292,30 +2339,39 @@ async function settingsModal(section, { admin = false } = {}) {
     if (!(await confirmInterrupt(question || 'Se reiniciarán los espacios de todos los usuarios; lo que estén haciendo se interrumpe y no se reanuda solo. ¿Reiniciar ahora?'))) return false;
     await api('POST', '/api/users/restart-all'); toast('Espacios reiniciados'); return true;
   };
-  // Reinicio de espacios: ahora (interrumpe lo que estén haciendo) o cuando todos estén libres (persistente en el servidor)
+  // Reinicio de espacios: programado (nadie inicia tareas nuevas y se reinicia al quedar todos libres) o ahora (avisa de quién está ocupado)
   let rs = { pending: false, busy: [] };
   let rsTimer = null;
+  const hhmm = (t) => new Date(t).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+  const rsWho = () => (rs.busy || []).map((b) => `<strong>${esc(b.name)}</strong> (${b.busy} conversación${b.busy > 1 ? 'es' : ''}${b.projects?.length ? `: ${esc(b.projects.join(', '))}` : ''})`).join(', ');
   const rsHtml = () => {
-    const names = (rs.busy || []).map((b) => `${esc(b.name)} (${b.busy || 0}${b.queued ? ` + ${b.queued} en cola` : ''})`).join(', ');
-    const wait = rs.pending
-      ? `<div class="banner" style="margin:0 0 10px"><strong>Reinicio en espera.</strong> Los espacios se reiniciarán solos cuando nadie esté trabajando${names ? ` (ahora trabajan: ${names})` : ''}.${rs.unknown ? ' Algún espacio no responde a la consulta; se reiniciará igualmente pasado el tiempo máximo.' : ''}<div class="row" style="margin-top:8px"><button class="btn small" type="button" data-rs="cancel">Cancelar la espera</button></div></div>`
-      : '';
-    return `${wait}<div class="row wrap"><button class="btn small primary" type="button" data-rs="idle"${rs.pending ? ' disabled' : ''}>Reiniciar cuando estén libres</button><button class="btn small" type="button" data-rs="now">Reiniciar ahora</button></div>`;
+    const who = rsWho();
+    const busyLine = who ? `<p style="margin:0 0 10px"><span class="chip warn">Ocupados</span> ${who}</p>` : '<p class="muted" style="margin:0 0 10px">Ahora mismo nadie está trabajando.</p>';
+    if (rs.pending) {
+      return `<div class="banner" style="margin:0 0 10px"><strong>Reinicio programado.</strong> Nadie puede iniciar tareas nuevas hasta que termine. Se reiniciará solo cuando todos estén libres (como máximo a las ${hhmm(rs.deadline)}).${rs.unknown ? ' Algún espacio no responde a la consulta de actividad.' : ''}</div>${busyLine}<div class="row wrap"><button class="btn small" type="button" data-rs="cancel">Cancelar el reinicio</button><button class="btn small danger" type="button" data-rs="now">Reiniciar ya</button></div>`;
+    }
+    return `${busyLine}<div class="row wrap"><button class="btn small primary" type="button" data-rs="idle">Programar reinicio</button><button class="btn small" type="button" data-rs="now">Reiniciar ahora</button></div><p class="muted" style="font-size:12.5px;margin:8px 0 0">«Programar» bloquea las tareas nuevas de todos, deja terminar las que están en curso y reinicia en cuanto todos estén libres (máx. ${rs.maxMinutes || 30} min). «Ahora» reinicia ya e interrumpe lo que estén haciendo.</p>`;
   };
   const drawRs = () => {
     m.el.querySelectorAll('.rs-slot').forEach((el) => { el.innerHTML = rsHtml(); });
     clearTimeout(rsTimer);
-    if (rs.pending && m.el.isConnected) rsTimer = setTimeout(rsLoad, 10_000);
+    if (m.el.isConnected) rsTimer = setTimeout(rsLoad, rs.pending ? 8000 : 15_000);
   };
   const rsLoad = async () => { try { rs = await api('GET', '/api/users/restart-status'); } catch { /* sin datos */ } drawRs(); };
+  const rsSchedule = async (b) => {
+    if (!confirm('Se bloquearán las tareas nuevas de TODOS los usuarios hasta que se reinicien los espacios. Las que están en curso terminan con normalidad y el reinicio ocurre en cuanto todos estén libres.\n\n¿Programar el reinicio?')) return false;
+    rs = await busyBtn(b, 'Programando…', () => api('POST', '/api/users/restart-all', { when: 'idle' }));
+    toast('Reinicio programado: nadie puede iniciar tareas nuevas');
+    return true;
+  };
   if (admin) {
     m.body.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-rs]');
       if (!b) return;
       try {
-        if (b.dataset.rs === 'idle') { rs = await busyBtn(b, 'Programando…', () => api('POST', '/api/users/restart-all', { when: 'idle' })); toast('Los espacios se reiniciarán cuando estén libres'); }
-        else if (b.dataset.rs === 'cancel') rs = await busyBtn(b, 'Cancelando…', () => api('POST', '/api/users/restart-cancel'));
-        else if (await busyBtn(b, 'Reiniciando…', () => spacesRestart())) rs = { pending: false, busy: [] };
+        if (b.dataset.rs === 'idle') await rsSchedule(b);
+        else if (b.dataset.rs === 'cancel') { rs = await busyBtn(b, 'Cancelando…', () => api('POST', '/api/users/restart-cancel')); toast('Reinicio cancelado'); }
+        else if (await busyBtn(b, 'Reiniciando…', () => spacesRestart())) await rsLoad();
         drawRs();
       } catch (err) { toast(err.message, 'err'); }
     });
@@ -2368,9 +2424,11 @@ async function settingsModal(section, { admin = false } = {}) {
     if (!r.ok) { toast(r.message || 'No se pudo aplicar', 'err'); return; }
     toast(r.message || okMsg);
     if (admin) {
-      if (confirm('Para que los espacios usen la nueva salida hay que reiniciarlos.\n\nAceptar: se reinician solos cuando nadie esté trabajando (sin interrumpir a nadie).\nCancelar: lo haré yo después con los botones de esta pantalla.')) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Los espacios se reiniciarán cuando estén libres'); }
-    } else if (await confirmInterrupt('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?')) {
-      await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); await loadModels(); renderModels();
+      if (confirm('Para que los espacios usen la nueva salida hay que reiniciarlos.\n\nAceptar: programar el reinicio (nadie podrá iniciar tareas nuevas; se reinicia cuando todos estén libres).\nCancelar: lo haré yo después con los botones de esta pantalla.')) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Reinicio programado: nadie puede iniciar tareas nuevas'); }
+    } else {
+      const after = async () => { await loadModels(); renderModels(); };
+      const r2 = await restartOpenCode('Para que OpenCode use la nueva salida hay que reiniciarlo. ¿Reiniciar OpenCode ahora?', after);
+      if (r2 === true) { toast('OpenCode reiniciado'); await after(); }
     }
     egRefresh();
   };
@@ -2392,10 +2450,10 @@ async function settingsModal(section, { admin = false } = {}) {
     q('#eg-conf')?.addEventListener('input', (e) => { egDraft = e.target.value; });
     click('#eg-reconnect', async (b) => { const r = await busyBtn(b, 'Reconectando…', () => api('POST', '/api/egress/action', { action: 'reconnect' })); eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message || 'Hecho', r.ok ? undefined : 'err'); egRefresh(); });
     click('#eg-on', async (b) => egAfter(await busyBtn(b, 'Activando…', () => api('POST', '/api/egress/action', { action: 'on' })), 'Túnel activado'));
-    click('#eg-off', async (b) => { if (!(admin ? confirm('Se desactivará el túnel. Los espacios de los usuarios se reiniciarán solos cuando nadie esté trabajando. ¿Continuar?') : await confirmInterrupt('Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
+    click('#eg-off', async (b) => { if (!(admin ? confirm('Se desactivará el túnel y se programará el reinicio de los espacios: nadie podrá iniciar tareas nuevas hasta que todos estén libres y se reinicien. ¿Continuar?') : await confirmInterrupt('Se desactivará el túnel y se reiniciará OpenCode. ¿Continuar?'))) return;
       const r = await busyBtn(b, 'Desactivando…', () => api('POST', '/api/egress/action', { action: 'off' }));
       eg = { ...eg, ...r }; $('#eg-block', m.el).innerHTML = egressBlock(); egBind(); toast(r.message);
-      if (admin) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Los espacios se reiniciarán cuando estén libres'); } else { await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); }
+      if (admin) { rs = await api('POST', '/api/users/restart-all', { when: 'idle' }); drawRs(); toast('Reinicio programado: nadie puede iniciar tareas nuevas'); } else { await api('POST', '/api/opencode/restart'); toast('OpenCode reiniciado'); }
       egRefresh(); });
     click('#eg-remove', async (b) => { if (!confirm('¿Quitar la configuración de WireGuard del VPS?')) return;
       const r = await busyBtn(b, 'Quitando…', () => api('POST', '/api/egress/action', { action: 'remove' }));
@@ -2499,7 +2557,11 @@ async function settingsModal(section, { admin = false } = {}) {
     renderModels();
     m.remove(); settingsModal('ia');
   });
-  click('#oc-restart', async (b) => { if (!(await confirmInterrupt('Se reiniciará OpenCode. ¿Continuar?'))) return; await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart')); toast('OpenCode reiniciado'); await loadModels(); renderModels(); });
+  click('#oc-restart', async (b) => {
+    const after = async () => { await loadModels(); renderModels(); };
+    const r = await busyBtn(b, 'Reiniciando…', () => restartOpenCode('Se reiniciará OpenCode. ¿Continuar?', after));
+    if (r === true) { toast('OpenCode reiniciado'); await after(); }
+  });
   click('#oc-upgrade', async (b) => { if (!(await confirmInterrupt('Se actualizará OpenCode y se reiniciará. ¿Continuar?'))) return; const r = await busyBtn(b, 'Actualizando…', () => api('POST', '/api/opencode/upgrade')); toast('OpenCode actualizado'); q('#oc-logbox').innerHTML = `<div class="output">${esc(r.output || '')}</div>`; });
   click('#oc-logs', async () => { const r = await api('GET', '/api/opencode/status'); q('#oc-logbox').innerHTML = `<div class="output">${esc((r.logs || []).join('\n') || 'Sin salida todavía')}</div>`; });
   click('#app-install', async () => { await installApp(); $('#app-block', m.el).innerHTML = appBlock(); });
@@ -2644,11 +2706,13 @@ async function settingsModal(section, { admin = false } = {}) {
     const act = b.dataset.x;
     try {
       if (act === 'apply') {
-        if (!(await confirmInterrupt('Se reiniciará OpenCode para aplicar las extensiones. ¿Continuar?'))) return;
-        await busyBtn(b, 'Reiniciando…', () => api('POST', '/api/opencode/restart'));
-        await new Promise((r) => setTimeout(r, 2500)); // OpenCode tarda un momento en cargar los servidores MCP
-        await loadExt(true);
-        toast('Extensiones aplicadas');
+        const applied = async () => {
+          await new Promise((r) => setTimeout(r, 2500)); // OpenCode tarda un momento en cargar los servidores MCP
+          await loadExt(true);
+          toast('Extensiones aplicadas');
+        };
+        const r = await busyBtn(b, 'Reiniciando…', () => restartOpenCode('Se reiniciará OpenCode para aplicar los cambios. ¿Continuar?', applied));
+        if (r === true) await applied();
       } else if (act === 'c7-save') {
         const v = q('#c7-key').value.trim();
         if (!v) return toast('Escribe la clave de Context7', 'err');
@@ -2813,6 +2877,7 @@ function bindShell() {
         case 'model-picker': modelPicker(); break;
         case 'context': contextModal(); break;
         case 'queue-del': await api('DELETE', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/${t.dataset.id}`); await loadQueue(); break;
+        case 'maint-cancel': state.maintCancel = true; await api('POST', '/api/opencode/restart-cancel'); state.maint = null; renderWait(); toast('Reinicio cancelado'); break;
         case 'queue-clear': await api('DELETE', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue`); await loadQueue(); break;
         case 'queue-resume': await api('POST', `/api/projects/${state.project.id}/sessions/${state.sessionId}/queue/resume`, {}); await loadQueue(); break;
         case 'install-app': await installApp(); break;
