@@ -251,6 +251,8 @@ const state = {
   gitFail: null,
   update: null,
   perms: new Map(),
+  questions: new Map(), // preguntas pendientes del agente (herramienta question)
+  qdraft: new Map(), // lo que lleva marcado/escrito el usuario en cada una
   navOpen: false,
 };
 let events = null;
@@ -485,11 +487,13 @@ function ocStateHtml() {
   const rows = a.sessions || [];
   const retrying = rows.filter((r) => r.state === 'retrying');
   const perm = rows.filter((r) => r.state === 'permission');
+  const asks = rows.filter((r) => r.state === 'question');
   const working = rows.filter((r) => r.state === 'working');
   const rpm = a.requests?.rpm ?? 0;
   let dot = 'idle', text = 'OpenCode inactivo';
   if (retrying.length) { dot = 'wait'; const s = remainingSec(retrying[0]); text = `Esperando al proveedor${s != null ? ` · reintento en ${s} s` : ''}`; }
   else if (perm.length) { dot = 'wait'; text = `Esperando tu permiso${perm.length > 1 ? ` (${perm.length})` : ''}`; }
+  else if (asks.length) { dot = 'wait'; text = `Esperando tu respuesta${asks.length > 1 ? ` (${asks.length})` : ''}`; }
   else if (working.length) { dot = 'work'; text = `Trabajando${working.length > 1 ? ` en ${working.length} conversaciones` : ''}`; }
   return `<button class="oc-state" data-act="sysmon" aria-label="Estado de OpenCode: ${esc(text)}"><span class="st ${dot}" aria-hidden="true"></span><span class="oc-text">${esc(text)}</span><span class="oc-rpm">${rpm} pet/min</span></button>`;
 }
@@ -501,6 +505,15 @@ function renderWait() {
   if (row?.state === 'retrying') {
     const s = remainingSec(row);
     box.innerHTML = `<span class="wait-ico" aria-hidden="true">⏳</span><span><strong>Esperando al proveedor.</strong> ${esc(row.retry.message || 'Límite de peticiones o error temporal')} · reintento ${row.retry.attempt}${s != null ? ` · próximo intento en ${s} s` : ''}</span>`;
+    box.classList.remove('hidden');
+  } else if (state.questions.size || row?.state === 'question') {
+    const q = [...state.questions.values()][0];
+    if (!q) {
+      box.innerHTML = '<span class="wait-ico" aria-hidden="true">❓</span><span><strong>OpenCode te pregunta algo</strong> · cargando…</span>';
+    } else if (box.querySelector('.wait-q')?.dataset.qid !== q.id) { // no se repinta si ya está: se perdería lo que escribes
+      box.innerHTML = questionCard(q);
+      syncQuestion();
+    }
     box.classList.remove('hidden');
   } else if (row?.state === 'permission' || state.perms.size) {
     const first = [...state.perms.values()][0];
@@ -526,6 +539,9 @@ async function loadActivity() {
     const slot = $('#sysmon-slot');
     if (slot) slot.innerHTML = sysCardHtml();
     const mine = (a.sessions || []).some((r) => r.sessionId === state.sessionId && r.projectId === state.project?.id && r.state === 'permission');
+    const asked = (a.sessions || []).some((r) => r.sessionId === state.sessionId && r.projectId === state.project?.id && r.state === 'question');
+    if (asked && !state.questions.size) await loadQuestions();
+    else if (!asked && state.questions.size) { state.questions.clear(); renderWait(); }
     if (mine && !state.perms.size) await loadPerms();
     else if (!mine && state.perms.size) { state.perms.clear(); renderPerms(); }
     renderWait();
@@ -855,6 +871,7 @@ async function selectProject(id) {
   state.queue = { items: [], paused: false };
   state.git = null;
   state.perms.clear();
+  state.questions.clear();
   store.set('project', id);
   renderAll();
   connectEvents();
@@ -882,6 +899,7 @@ async function selectSession(id, keepNav = false) {
   state.messages = [];
   state.queue = { items: [], paused: false };
   state.perms.clear();
+  state.questions.clear();
   store.set(`session:${state.project.id}`, id);
   if (!keepNav) state.navOpen = false;
   renderAll();
@@ -909,6 +927,7 @@ async function refreshMessages(forceScroll = false) {
     if (!Array.isArray(msgs)) return;
     state.messages = msgs;
     renderMessages(forceScroll);
+    if (msgs.some((m) => m.parts?.some((x) => x.type === 'tool' && x.tool === 'question' && x.state?.status === 'running'))) loadQuestions();
   } catch (e) {
     if (e.message !== 'Sesión caducada') toast(e.message, 'err');
   }
@@ -998,6 +1017,7 @@ function handleEvent(ev) {
     refreshMessages();
   } else if (t.startsWith('message.') && mine) {
     if (!state.busy) setBusy(true);
+    if (p.part?.tool === 'question') setTimeout(loadQuestions, 300);
     scheduleRefresh();
   } else if (t === 'session.updated' || t === 'session.created' || t === 'session.deleted') {
     clearTimeout(sessionsTimer);
@@ -1029,6 +1049,97 @@ function renderTool(part) {
   return `<details class="tool" data-key="${esc(part.id)}">
     <summary><span class="status-dot ${esc(status)}"></span><span class="tname">${esc(part.tool || 'herramienta')}</span><span class="tsub">${esc(toolSummary(part))}</span></summary>
     ${body ? `<pre>${esc(body)}</pre>` : ''}</details>`;
+}
+
+/* ---------- Preguntas del agente (herramienta question) ---------- */
+async function loadQuestions() {
+  if (!state.project || !state.sessionId) return;
+  const pid = state.project.id, sid = state.sessionId;
+  try {
+    const list = await api('GET', `/api/projects/${pid}/questions`);
+    if (state.project?.id !== pid || state.sessionId !== sid) return;
+    const mine = (Array.isArray(list) ? list : []).filter((x) => x.sessionID === sid);
+    for (const id of [...state.questions.keys()]) if (!mine.some((x) => x.id === id)) { state.questions.delete(id); state.qdraft.delete(id); }
+    for (const x of mine) state.questions.set(x.id, x);
+    renderWait();
+  } catch { /* se reintenta en el siguiente ciclo */ }
+}
+
+function qDraft(q) {
+  if (!state.qdraft.has(q.id)) state.qdraft.set(q.id, { sel: q.questions.map(() => []), text: q.questions.map(() => '') });
+  return state.qdraft.get(q.id);
+}
+
+function questionCard(q) {
+  const d = qDraft(q);
+  const items = q.questions.map((x, i) => `
+    <div class="qblock">
+      ${x.header ? `<span class="chip">${esc(x.header)}</span>` : ''}
+      <p class="qtext">${esc(x.question)}</p>
+      <div class="qopts" role="${x.multiple ? 'group' : 'radiogroup'}">${(x.options || []).map((o, j) => `<button type="button" class="qopt${d.sel[i].includes(o.label) ? ' on' : ''}" data-qi="${i}" data-oi="${j}" aria-pressed="${d.sel[i].includes(o.label)}"><strong>${esc(o.label)}</strong>${o.description ? `<span>${esc(o.description)}</span>` : ''}</button>`).join('')}</div>
+      ${x.custom === false ? '' : `<input type="text" class="qcustom" data-qi="${i}" placeholder="${(x.options || []).length ? 'Otra respuesta…' : 'Tu respuesta…'}" maxlength="1000" enterkeyhint="done" autocapitalize="sentences" value="${esc(d.text[i])}">`}
+    </div>`).join('');
+  return `<div class="wait-q" data-qid="${esc(q.id)}"><div class="qhead"><span class="wait-ico" aria-hidden="true">❓</span> <strong>OpenCode te pregunta</strong>${state.questions.size > 1 ? ` <span class="muted">(${state.questions.size} pendientes)</span>` : ''}</div>${items}
+    <div class="row wrap qactions"><button type="button" class="btn primary grow" data-qsend disabled>Enviar respuestas</button><button type="button" class="btn danger" data-qrej>Descartar</button></div></div>`;
+}
+
+const qAnswers = (q) => { const d = qDraft(q); return q.questions.map((_, i) => [...d.sel[i], ...(d.text[i].trim() ? [d.text[i].trim()] : [])]); };
+function syncQuestion() {
+  const box = $('#wait .wait-q');
+  const q = box && state.questions.get(box.dataset.qid);
+  if (!q) return;
+  const d = qDraft(q);
+  box.querySelectorAll('.qopt').forEach((b) => { const on = d.sel[+b.dataset.qi].includes(q.questions[+b.dataset.qi].options[+b.dataset.oi].label); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+  const ready = qAnswers(q).every((a) => a.length);
+  const send = box.querySelector('[data-qsend]');
+  if (send && !send.dataset.busy) send.disabled = !ready;
+}
+
+function bindQuestions() {
+  const wait = $('#wait');
+  wait.addEventListener('input', (e) => {
+    const f = e.target.closest?.('.qcustom');
+    const q = f && state.questions.get(f.closest('.wait-q')?.dataset.qid);
+    if (!q) return;
+    const i = +f.dataset.qi, d = qDraft(q);
+    d.text[i] = f.value;
+    if (!q.questions[i].multiple && f.value.trim()) d.sel[i] = []; // en una sola elección, escribir sustituye a lo marcado
+    syncQuestion();
+  });
+  wait.addEventListener('click', async (e) => {
+    const box = e.target.closest?.('.wait-q');
+    const q = box && state.questions.get(box.dataset.qid);
+    if (!q) return;
+    const opt = e.target.closest('.qopt');
+    if (opt) {
+      const i = +opt.dataset.qi, label = q.questions[i].options[+opt.dataset.oi].label, d = qDraft(q);
+      if (q.questions[i].multiple) d.sel[i] = d.sel[i].includes(label) ? d.sel[i].filter((x) => x !== label) : [...d.sel[i], label];
+      else { d.sel[i] = d.sel[i].includes(label) ? [] : [label]; if (d.sel[i].length) { d.text[i] = ''; const f = box.querySelector(`.qcustom[data-qi="${i}"]`); if (f) f.value = ''; } }
+      syncQuestion();
+      return;
+    }
+    const base = `/api/projects/${state.project.id}/sessions/${state.sessionId}/questions/${q.id}`;
+    if (e.target.closest('[data-qsend]')) {
+      const btn = e.target.closest('[data-qsend]');
+      btn.dataset.busy = '1';
+      try {
+        await busyBtn(btn, 'Enviando…', () => api('POST', `${base}/reply`, { answers: qAnswers(q) }));
+        state.questions.delete(q.id); state.qdraft.delete(q.id);
+        setBusy(true);
+        renderWait();
+        setTimeout(loadActivity, 800);
+        setTimeout(() => refreshMessages(), 900);
+      } catch (err) { toast(err.message, 'err'); } finally { delete btn.dataset.busy; syncQuestion(); }
+    } else if (e.target.closest('[data-qrej]')) {
+      if (!confirm('Descartar las preguntas detiene la tarea de OpenCode. ¿Descartar?')) return;
+      try {
+        await api('POST', `${base}/reject`);
+        state.questions.delete(q.id); state.qdraft.delete(q.id);
+        renderWait();
+        setTimeout(refreshMessages, 600);
+      } catch (err) { toast(err.message, 'err'); }
+    }
+  });
 }
 
 /* ---------- Archivos que menciona el agente (capturas, informes…) ---------- */
@@ -2635,6 +2746,7 @@ function bindShell() {
   // Botón "ir al final" cuando el usuario se aleja del último mensaje
   const chat = $('#chat');
   const toBottom = $('#to-bottom');
+  bindQuestions();
   chat.addEventListener('click', (e) => {
     const t = e.target.closest?.('[data-fopen]');
     if (t) fileViewer(t.dataset.fopen, t.querySelector('span')?.textContent || 'Imagen');

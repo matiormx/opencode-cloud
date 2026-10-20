@@ -118,12 +118,14 @@ router.get(
       loadProjects().map(async (pr) => {
         const dir = withPath(pr).path;
         try {
-          const [st, perms] = await Promise.all([
+          const [st, perms, asks] = await Promise.all([
             oc.json('GET', '/session/status', { directory: dir }),
             oc.json('GET', '/permission', { directory: dir }).catch(() => []),
+            oc.json('GET', '/question', { directory: dir }).catch(() => []),
           ]);
           const pending = new Set((Array.isArray(perms) ? perms : []).map((x) => x.sessionID));
-          const ids = new Set([...Object.keys(st || {}).filter((k) => st[k] && st[k].type !== 'idle'), ...pending]);
+          const asking = new Set((Array.isArray(asks) ? asks : []).map((x) => x.sessionID));
+          const ids = new Set([...Object.keys(st || {}).filter((k) => st[k] && st[k].type !== 'idle'), ...pending, ...asking]);
           if (!ids.size) return;
           let titles = new Map();
           try {
@@ -134,6 +136,7 @@ router.get(
             const v = st?.[id];
             const row = { projectId: pr.id, projectName: pr.name, sessionId: id, title: titles.get(id) || '', state: 'working' };
             if (pending.has(id)) row.state = 'permission';
+            else if (asking.has(id)) row.state = 'question';
             else if (v?.type === 'retry') {
               const next = Number(v.next) || 0;
               const nextAt = next > 1e11 ? next : next ? Date.now() + next : 0;
@@ -801,6 +804,37 @@ router.post(
       // Versiones anteriores
       res.json(await oc.json('POST', `/session/${sid(req)}/permissions/${req.params.pid}`, { directory: p.path, body: { response } }));
     }
+  }),
+);
+
+// --- Preguntas del agente (herramienta «question»): lista, respuesta y descarte ---
+router.get('/projects/:id/questions', ocRoute((dir) => oc.json('GET', '/question', { directory: dir })));
+router.post(
+  '/projects/:id/sessions/:sid/questions/:qid/reply',
+  wrap(async (req, res) => {
+    const p = getProject(req);
+    if (!SID.test(req.params.qid)) throw fail('Pregunta no válida');
+    const raw = req.body?.answers;
+    if (!Array.isArray(raw) || raw.length > 20 || raw.some((a) => !Array.isArray(a) || a.length > 20 || a.some((x) => typeof x !== 'string' || x.length > 1000))) throw fail('Respuestas no válidas');
+    const answers = raw.map((a) => a.map((x) => x.trim()).filter(Boolean));
+    if (answers.some((a) => !a.length)) throw fail('Responde a todas las preguntas');
+    const opts = { directory: p.path };
+    try {
+      await oc.json('POST', `/question/${req.params.qid}/reply`, { ...opts, body: { answers } });
+    } catch (e) {
+      if (e.status !== 404) throw e;
+      await oc.json('POST', `/api/session/${sid(req)}/question/${req.params.qid}/reply`, { ...opts, body: { answers } }); // versiones nuevas
+    }
+    res.json({ ok: true });
+  }),
+);
+router.post(
+  '/projects/:id/sessions/:sid/questions/:qid/reject',
+  wrap(async (req, res) => {
+    const p = getProject(req);
+    if (!SID.test(req.params.qid)) throw fail('Pregunta no válida');
+    queue.pauseIfAny(p.id, sid(req));
+    res.json(await oc.json('POST', `/question/${req.params.qid}/reject`, { directory: p.path }));
   }),
 );
 

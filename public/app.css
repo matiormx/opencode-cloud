@@ -648,3 +648,15 @@ details.compacted .rbody { margin-top: 8px; color: var(--text); }
 .fchip span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fview { text-align: center; }
 .fview img { max-width: 100%; max-height: 70dvh; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); }
+
+/* Preguntas del agente */
+.wait-q { width: 100%; display: flex; flex-direction: column; gap: 12px; max-height: min(58dvh, calc(var(--vvh, 100dvh) - 220px)); overflow-y: auto; overscroll-behavior: contain; }
+.qblock { display: flex; flex-direction: column; gap: 8px; }
+.qtext { margin: 0; font-weight: 600; }
+.qopts { display: flex; flex-direction: column; gap: 6px; }
+.qopt { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; cursor: pointer; transition: transform .12s ease-out, border-color .12s, background .12s; }
+.qopt:active { transform: scale(.98); }
+.qopt span { font-size: 13px; color: var(--muted); }
+.qopt.on { border-color: var(--accent); background: var(--accent-soft); }
+.qopt.on span { color: var(--text); }
+.qactions { position: sticky; bottom: 0; padding-top: 4px; }
