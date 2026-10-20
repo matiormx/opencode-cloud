@@ -55,13 +55,15 @@ const store = {
 };
 
 async function api(method, url, body) {
+  const orig = url;
+  if (state.adminHost && url.startsWith('/api/')) url = `/admin${url}`; // el panel de administración tiene su propia API
   const res = await fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'occloud' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && url !== '/api/login') {
+  if (res.status === 401 && orig !== '/api/login') {
     showLogin();
     throw new Error('Sesión caducada');
   }
@@ -316,7 +318,7 @@ if ('serviceWorker' in navigator && window.isSecureContext) {
 /* ============================== Login ============================== */
 function showLogin() {
   closeEvents();
-  const multi = state.multiuser && !state.adminHost;
+  const multi = state.multiuser && !state.adminHost; // en el panel solo entra el administrador: no se pide usuario
   let last = '';
   try { last = localStorage.getItem('lastUser') || ''; } catch { /* sin almacenamiento */ }
   $('#root').innerHTML = `
@@ -337,12 +339,48 @@ function showLogin() {
       const r = await busyBtn(btn, 'Entrando…', () => api('POST', '/api/login', body));
       state.me = r.user || null;
       if (multi) { try { localStorage.setItem('lastUser', body.username); } catch { /* sin almacenamiento */ } }
-      await (state.adminHost ? mountAdmin() : mountApp());
+      await enter();
     } catch (err) {
       toast(err.message, 'err');
       $('#pw').select();
     }
   });
+}
+
+/* ============================== Rutas: puerta, panel y espacios ============================== */
+// «/» es la puerta (login y reparto), «/admin/» el panel y «/u/<usuario>/» el espacio de cada uno (modo multiusuario)
+function parseRoute() {
+  const p = location.pathname;
+  if (/^\/admin(\/|$)/.test(p)) return { kind: 'admin' };
+  const m = p.match(/^\/u\/([a-z][a-z0-9]{1,19})\/?$/);
+  return m ? { kind: 'user', name: m[1] } : { kind: 'root' };
+}
+const homeOf = (u) => `/u/${u.name}/`;
+
+// Qué mostrar según la ruta y la sesión actual
+async function enter() {
+  const r = state.route || { kind: 'root' }, u = state.me;
+  if (!state.multiuser) return r.kind === 'root' ? mountApp() : location.replace('/');
+  if (!u) return showLogin();
+  if (r.kind === 'admin') return u.role === 'admin' ? mountAdmin() : showLogin();
+  if (r.kind === 'user') return u.name === r.name ? mountApp() : location.replace(homeOf(u));
+  if (u.role === 'admin') return showPortal(u);
+  location.replace(homeOf(u));
+}
+
+// El administrador elige entre el panel y su espacio de trabajo
+function showPortal(u) {
+  closeEvents();
+  $('#root').innerHTML = `
+    <div class="login"><div class="login-card portal">
+      <div class="logo">${ico(I.code, 'stroke="#fff" stroke-width="2.4"')}</div>
+      <h1>Hola, ${esc(u.name)}</h1>
+      <p class="muted" style="margin:0 0 20px">¿A dónde quieres ir?</p>
+      <a class="btn primary" style="width:100%;margin-bottom:10px" href="${esc(homeOf(u))}">Trabajar</a>
+      <a class="btn" style="width:100%;margin-bottom:10px" href="/admin/">Administración</a>
+      <button class="btn ghost" style="width:100%" type="button" id="portal-out">Cerrar sesión</button>
+    </div></div>`;
+  $('#portal-out').addEventListener('click', async () => { try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ } state.me = null; showLogin(); });
 }
 
 /* ============================== Estructura ============================== */
@@ -2092,10 +2130,10 @@ async function settingsModal(section, { admin = false } = {}) {
       </details>`;
   };
 
-  const viewTitles = { conn: 'Conexiones', ia: 'IA y OpenCode', ext: 'Extensiones', sk: 'Habilidades', users: 'Usuarios', red: 'Salida a internet', upd: 'Actualizaciones', app: 'Aplicación', pw: 'Contraseña' };
+  const viewTitles = { oc: 'OpenCode', conn: 'Conexiones', ia: 'IA y OpenCode', ext: 'Extensiones', sk: 'Habilidades', users: 'Usuarios', red: 'Salida a internet', upd: 'Actualizaciones', app: 'Aplicación', pw: 'Contraseña' };
   const legacy = { update: 'upd', egress: 'red' };
   let curView = legacy[section] || (viewTitles[section] ? section : 'main');
-  if ((curView === 'users' || curView === 'red' || curView === 'upd') && !canAdmin) curView = 'main';
+  if ((curView === 'users' || curView === 'red' || curView === 'upd' || curView === 'oc') && !canAdmin) curView = 'main';
 
   const mainHtml = () => {
     const R = (k, icon, label, val = '', hot = false) => `<button type="button" class="srow" data-go="${k}"><span class="si">${ico(icon, 'width="22" height="22"')}</span><span class="sl">${label}</span>${val ? `<span class="sv${hot ? ' hot' : ''}">${esc(val)}</span>` : ''}<span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></button>`;
@@ -2115,7 +2153,7 @@ async function settingsModal(section, { admin = false } = {}) {
       ${settings.adminUrl ? `<div class="scard"><a class="srow" href="${esc(settings.adminUrl)}" target="_blank" rel="noopener noreferrer"><span class="si">${ico(I.tusers, 'width="22" height="22"')}</span><span class="sl">Panel de administración</span><span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></a></div>` : ''}`}
       ${admin ? `<div class="sgl">Recursos</div><div class="scard" style="padding:10px 12px" id="adm-sys">${sysCardHtml()}</div>` : ''}
       ${canAdmin ? `<div class="sgl">Servidor</div>
-      <div class="scard">${R('users', I.tusers, 'Usuarios', usersVal)}${R('red', I.tred, 'Salida a internet', egVal)}${R('upd', I.upd, 'Actualizaciones', u?.behind ? `${u.behind} nueva${u.behind > 1 ? 's' : ''}` : (u?.version ? `v${u.version}` : ''), Boolean(u?.behind))}</div>` : ''}
+      <div class="scard">${R('users', I.tusers, 'Usuarios', usersVal)}${R('red', I.tred, 'Salida a internet', egVal)}${admin ? R('oc', I.tia, 'OpenCode', 'Actualizar') : ''}${R('upd', I.upd, 'Actualizaciones', u?.behind ? `${u.behind} nueva${u.behind > 1 ? 's' : ''}` : (u?.version ? `v${u.version}` : ''), Boolean(u?.behind))}</div>` : ''}
       <div class="scard" style="margin-top:22px">${admin ? R('pw', I.lock, 'Contraseña') : ''}${R('app', I.phone, 'Instalar aplicación', isStandalone() ? 'Instalada' : '')}</div>
       <div class="sgl">Apariencia</div>
       <div class="themes">${[['light', 'Claro'], ['dark', 'Oscuro'], ['system', 'Sistema']].map(([k, l]) => `<button type="button" class="theme-opt${theme === k ? ' on' : ''}" data-theme-set="${k}"><span class="tp ${k}"></span><span>${l}</span></button>`).join('')}</div>
@@ -2161,7 +2199,7 @@ async function settingsModal(section, { admin = false } = {}) {
 
     <h3>OpenCode</h3>
     <p style="margin-top:0">Estado: ${oc.healthy ? '<span style="color:var(--ok)">en marcha</span>' : '<span style="color:var(--err)">no responde</span>'}${oc.version ? ` · versión ${esc(oc.version)}` : ''}</p>
-    <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button>${canAdmin ? '<button class="btn" id="oc-upgrade">Actualizar OpenCode</button>' : ''}<button class="btn ghost" id="oc-logs">Ver registro</button></div>
+    <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button>${canAdmin && !admin ? '<button class="btn" id="oc-upgrade">Actualizar OpenCode</button>' : ''}<button class="btn ghost" id="oc-logs">Ver registro</button></div>
     <div id="oc-logbox"></div>
     </div>
 
@@ -2182,6 +2220,10 @@ async function settingsModal(section, { admin = false } = {}) {
     <h3 id="sec-egress" class="t-dup">Salida a internet (WireGuard)</h3>
     <div id="eg-block">${egressBlock()}</div>
     </div>` : ''}
+
+    ${admin ? `<div class="tabpane" data-pane="oc"${curView === 'oc' ? '' : ' hidden'}>
+    <p class="muted" style="margin-top:0">OpenCode es el mismo programa para todos los espacios. Al actualizarlo se reinician todos (se avisa si alguien está trabajando).</p>
+    <div class="row wrap"><button class="btn" id="oc-upgrade">Actualizar OpenCode</button></div></div>` : ''}
 
     ${canAdmin ? `<div class="tabpane" data-pane="upd"${curView === 'upd' ? '' : ' hidden'}>
     <h3 id="sec-update" class="t-dup">Actualizaciones de esta aplicación</h3>
@@ -2623,7 +2665,7 @@ async function settingsModal(section, { admin = false } = {}) {
     if (e.target.closest('[data-sback]')) return curView === 'main' ? m.close() : openView('main');
     const th = e.target.closest('[data-theme-set]');
     if (th) { store.set('theme', th.dataset.themeSet); applyTheme(th.dataset.themeSet, true); drawMain(); return; }
-    if (e.target.closest('[data-logout]')) { try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ } if (admin) { stopAdminTimer(); document.querySelector('.backdrop')?.remove(); } else m.close(); showLogin(); return; }
+    if (e.target.closest('[data-logout]')) { try { await api('POST', '/api/logout'); } catch { /* sesión ya cerrada */ } if (admin) { stopAdminTimer(); document.querySelector('.backdrop')?.remove(); } else m.close(); state.me = null; showLogin(); return; }
     if (e.target.closest('[data-sinfo]')) {
       const u = state.update;
       const about = openModal('Acerca de', `<div class="stack">
@@ -2883,12 +2925,13 @@ tuneAll(document.body);
 /* ============================== Arranque ============================== */
 (async () => {
   try {
+    state.route = parseRoute();
+    state.adminHost = state.route.kind === 'admin';
     const me = await api('GET', '/api/me');
     state.multiuser = Boolean(me.multiuser);
     state.me = me.user || null;
-    state.adminHost = Boolean(me.adminHost);
     if (state.adminHost) document.title = 'OpenCode Admin';
-    if (me.authenticated) await (state.adminHost ? mountAdmin() : mountApp());
+    if (me.authenticated) await enter();
     else showLogin();
   } catch {
     showLogin();

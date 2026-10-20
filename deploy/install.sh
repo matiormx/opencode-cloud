@@ -8,7 +8,6 @@
 #   REPO_URL=https://github.com/usuario/opencode-cloud.git   repo del que instalar/actualizar (por defecto: el origin del clon actual)
 #   BRANCH=main            rama que sigue el actualizador
 #   DOMAIN=cloud.midominio.com   instala Caddy y publica con HTTPS automático (el DNS debe apuntar ya al VPS)
-#   ADMIN_DOMAIN=otro.midominio.com   dominio del panel de administración (por defecto admin.<DOMAIN>; ADMIN_DOMAIN= vacío = sin panel aparte)
 #   EXPOSE_HTTP=1          sin dominio: escucha en 0.0.0.0 por HTTP (inseguro salvo red privada)
 #   ADMIN_PASSWORD=...     contraseña inicial (si no se indica, se genera una)
 #   GITHUB_TOKEN=...       token para clonar un repo privado; también se guarda para que la WebUI pueda actualizar
@@ -20,7 +19,6 @@ set -euo pipefail
 [ -z "${DOMAIN+x}" ] && ASK_DOMAIN=1 || ASK_DOMAIN=0
 [ -z "${EXPOSE_HTTP+x}" ] && ASK_EXPOSE=1 || ASK_EXPOSE=0
 [ -z "${GITHUB_TOKEN+x}" ] && ASK_TOKEN=1 || ASK_TOKEN=0
-[ -z "${ADMIN_DOMAIN+x}" ] && ASK_ADMIN_DOMAIN=1 || ASK_ADMIN_DOMAIN=0
 [ -z "${ADMIN_PASSWORD+x}" ] && ASK_PASSWORD=1 || ASK_PASSWORD=0
 [ -z "${OC_PERMISSION+x}" ] && ASK_PERMISSION=1 || ASK_PERMISSION=0
 
@@ -30,7 +28,6 @@ DATA_DIR="${DATA_DIR:-/var/lib/opencode-cloud}"
 PORT="${PORT:-3000}"
 BRANCH="${BRANCH:-main}"
 DOMAIN="${DOMAIN:-}"
-ADMIN_DOMAIN="${ADMIN_DOMAIN:-}"
 EXPOSE_HTTP="${EXPOSE_HTTP:-0}"
 OC_PERMISSION="${OC_PERMISSION:-ask}"
 REPO_URL="${REPO_URL:-}"
@@ -93,7 +90,6 @@ if [ "$INTERACTIVE" = 1 ]; then
 
   if [ "$ASK_DOMAIN" = 1 ]; then
     echo "Dominio para HTTPS automático (el DNS debe apuntar ya a este servidor y los puertos 80/443 estar abiertos)." >/dev/tty
-    echo "El panel de administración usará admin.<dominio>: crea también ese registro DNS (o un comodín *.<dominio>)." >/dev/tty
     while :; do
       ask "Dominio (vacío = sin dominio): " DOMAIN
       DOMAIN="${DOMAIN#http://}"; DOMAIN="${DOMAIN#https://}"; DOMAIN="${DOMAIN%%/*}"
@@ -101,8 +97,6 @@ if [ "$INTERACTIVE" = 1 ]; then
       echo "  Dominio no válido, prueba de nuevo." >/dev/tty
     done
   fi
-  # El panel de administración va en admin.<dominio> (app aparte): no se pregunta
-  [ -n "$DOMAIN" ] && [ "$ASK_ADMIN_DOMAIN" = 1 ] && ADMIN_DOMAIN="admin.$DOMAIN"
   if [ -z "$DOMAIN" ] && [ "$ASK_EXPOSE" = 1 ]; then
     echo "Sin dominio el servicio solo escucha en 127.0.0.1 (acceso por túnel SSH)." >/dev/tty
     if yesno "¿Exponerlo por HTTP sin cifrar en el puerto $PORT? (no recomendado)" n; then EXPOSE_HTTP=1; fi
@@ -147,7 +141,6 @@ if [ "$INTERACTIVE" = 1 ]; then
   echo "Resumen:" >/dev/tty
   echo "  Repositorio:   $REPO_URL (rama $BRANCH)" >/dev/tty
   if [ -n "$DOMAIN" ]; then echo "  Acceso:        https://$DOMAIN (Caddy + HTTPS)" >/dev/tty
-    [ -n "$ADMIN_DOMAIN" ] && echo "  Administración: https://$ADMIN_DOMAIN (app aparte)" >/dev/tty
   elif [ "$EXPOSE_HTTP" = 1 ]; then echo "  Acceso:        http://IP:$PORT (sin cifrar)" >/dev/tty
   else echo "  Acceso:        solo local (túnel SSH)" >/dev/tty; fi
   echo "  Token GitHub:  $([ -n "$GITHUB_TOKEN" ] && echo sí || echo no)" >/dev/tty
@@ -237,8 +230,6 @@ HOST=127.0.0.1
 [ "$EXPOSE_HTTP" = "1" ] && HOST=0.0.0.0
 SECURE=0
 [ -n "$DOMAIN" ] && SECURE=1
-[ -n "$DOMAIN" ] && [ "$ASK_ADMIN_DOMAIN" = 1 ] && ADMIN_DOMAIN="admin.$DOMAIN"
-[ -z "$ADMIN_DOMAIN" ] || [[ "$ADMIN_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "ADMIN_DOMAIN no válido"
 
 ENV_FILE="/etc/$SERVICE.env"
 cat > "$ENV_FILE" <<EOF
@@ -249,7 +240,6 @@ SECURE_COOKIES=$SECURE
 UPDATE_BRANCH=$BRANCH
 OC_PERMISSION=$OC_PERMISSION
 EOF
-[ -n "$DOMAIN" ] && [ -n "$ADMIN_DOMAIN" ] && echo "ADMIN_HOST=$ADMIN_DOMAIN" >> "$ENV_FILE"
 chown root:"$APP_USER" "$ENV_FILE"
 chmod 640 "$ENV_FILE"
 
@@ -325,17 +315,8 @@ $DOMAIN {
 	}
 }
 EOF
-  if [ -n "$ADMIN_DOMAIN" ]; then
-    cat >> /etc/caddy/Caddyfile <<EOF
-
-$ADMIN_DOMAIN {
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:$PORT
-}
-EOF
-  fi
   systemctl enable caddy >/dev/null
-  systemctl reload caddy 2>/dev/null || systemctl restart caddy
+  systemctl restart caddy   # con «admin off» no hay API de recarga: se reinicia
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
     ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
     log "Reglas de ufw para 80/443 añadidas"
@@ -356,7 +337,6 @@ echo
 printf '\033[1;32m✔ OpenCode Cloud instalado\033[0m\n\n'
 if [ -n "$DOMAIN" ]; then
   echo "  URL:         https://$DOMAIN"
-  [ -n "$ADMIN_DOMAIN" ] && echo "  Panel admin: https://$ADMIN_DOMAIN   (instálalo como app aparte; entra con el usuario admin)"
 elif [ "$EXPOSE_HTTP" = "1" ]; then
   echo "  URL:         http://$IP:$PORT   (HTTP sin cifrar: úsalo solo en una red de confianza)"
 else
@@ -370,4 +350,5 @@ else
   echo "  Contraseña:  la que ya tenías configurada (cámbiala con: sudo -u $APP_USER DATA_DIR=$DATA_DIR node $APP_DIR/bin/set-password.js 'nueva')"
 fi
 echo "  Servicio:    systemctl status $SERVICE   ·   journalctl -u $SERVICE -f"
+echo "  Rutas:       entra por la raíz (usuario y contraseña); el administrador elige entre Trabajar (/u/admin/) y Administración (/admin/)."
 echo "  Siguiente:   entra, abre Ajustes y añade tu token de GitHub y la API key de tu proveedor de IA."

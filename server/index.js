@@ -26,6 +26,11 @@ const fsp = fs.promises;
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 'loopback');
+// API del panel de administración (/admin/api/…): se atiende como /api/… marcada como contexto de administración
+app.use((req, res, next) => {
+  if (config.multiuser && !config.instance && req.url.startsWith('/admin/api/')) { req.adminCtx = true; req.url = req.url.slice('/admin'.length); }
+  next();
+});
 // Modo multiusuario: las peticiones de los usuarios que no son el administrador se reenvían a su espacio sin leer el cuerpo
 app.use('/api', gateway.proxy);
 app.use(express.json({ limit: '14mb' })); // los mensajes con imágenes van en base64
@@ -41,19 +46,45 @@ app.use((req, res, next) => {
   next();
 });
 
-// En el dominio del panel de administración, la app se instala aparte: otro nombre, otro id y otros iconos
-app.use((req, res, next) => {
-  if (!gateway.isAdminHost(req)) return next();
-  if (req.path === '/manifest.webmanifest') {
-    const m = JSON.parse(fs.readFileSync(path.join(config.root, 'public', 'manifest.webmanifest'), 'utf8'));
-    Object.assign(m, { id: '/admin', name: 'OpenCode Admin', short_name: 'Admin', description: 'Panel de administración de OpenCode Cloud.', theme_color: '#1f2937', background_color: '#1f2937' });
-    m.icons = m.icons.filter((i) => !i.src.endsWith('.svg')).map((i) => ({ ...i, src: i.src.replace('/icons/', '/icons/admin-') }));
-    res.setHeader('Cache-Control', 'no-cache');
-    return res.type('application/manifest+json').send(JSON.stringify(m));
-  }
-  if (/^\/icons\/(icon-|apple-touch-icon)/.test(req.path)) req.url = req.url.replace('/icons/', '/icons/admin-');
-  next();
-});
+// Páginas del modo multiusuario: «/» es la puerta (login y reparto), «/admin/» el panel y «/u/<usuario>/» el espacio de cada uno.
+// Cada una se instala como su propia app (manifest con su id y su ámbito). Los archivos y la API no cambian de sitio.
+if (config.multiuser && !config.instance) {
+  const baseManifest = () => JSON.parse(fs.readFileSync(path.join(config.root, 'public', 'manifest.webmanifest'), 'utf8'));
+  const manifestFor = (admin, name) => {
+    const m = baseManifest();
+    const scope = admin ? '/admin/' : `/u/${name}/`;
+    Object.assign(m, { id: scope, start_url: scope, scope });
+    if (admin) {
+      Object.assign(m, { name: 'OpenCode Admin', short_name: 'Admin', description: 'Panel de administración de OpenCode Cloud.', theme_color: '#1f2937', background_color: '#1f2937' });
+      m.icons = m.icons.filter((i) => !i.src.endsWith('.svg')).map((i) => ({ ...i, src: i.src.replace('/icons/', '/icons/admin-') }));
+    }
+    return m;
+  };
+  const pageFor = (admin, name) => {
+    let h = fs.readFileSync(path.join(config.root, 'public', 'index.html'), 'utf8');
+    const scope = admin ? '/admin/' : `/u/${name}/`;
+    h = h.replace('href="/manifest.webmanifest"', `href="${scope}manifest.webmanifest"`);
+    if (admin) h = h.replace('/icons/apple-touch-icon.png', '/icons/admin-apple-touch-icon.png').replace('<title>OpenCode Cloud</title>', '<title>OpenCode Admin</title>').replace('name="apple-mobile-web-app-title" content="OpenCode"', 'name="apple-mobile-web-app-title" content="Admin"').replace('name="application-name" content="OpenCode Cloud"', 'name="application-name" content="OpenCode Admin"');
+    return h;
+  };
+  const noCache = (res) => res.setHeader('Cache-Control', 'no-cache');
+  const sendPage = (res, admin, name) => {
+    noCache(res);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.type('html').send(pageFor(admin, name));
+  };
+  const sendManifest = (res, admin, name) => { noCache(res); res.type('application/manifest+json').send(JSON.stringify(manifestFor(admin, name))); };
+  const validName = (n) => users.NAME_RE.test(String(n));
+  app.get('/admin', (req, res, next) => (req.path === '/admin' ? res.redirect(301, '/admin/') : next()));
+  app.get('/admin/', (req, res) => sendPage(res, true));
+  app.get('/admin/manifest.webmanifest', (req, res) => sendManifest(res, true));
+  app.get('/u/:name', (req, res, next) => (req.path.endsWith('/') ? next() : res.redirect(301, `/u/${encodeURIComponent(req.params.name)}/`)));
+  app.get('/u/:name/', (req, res, next) => (validName(req.params.name) ? sendPage(res, false, req.params.name) : next()));
+  app.get('/u/:name/manifest.webmanifest', (req, res, next) => (validName(req.params.name) ? sendManifest(res, false, req.params.name) : next()));
+}
 
 app.use(
   express.static(path.join(config.root, 'public'), {
@@ -85,8 +116,7 @@ const meInfo = (req) => {
 
 app.get('/api/me', (req, res) => {
   const user = config.instance ? null : meInfo(req);
-  const onAdmin = gateway.isAdminHost(req);
-  res.json({ authenticated: Boolean(user) && (!onAdmin || user.role === 'admin'), passwordSet: auth.hasPassword(), multiuser: config.multiuser, adminHost: onAdmin, user });
+  res.json({ authenticated: Boolean(user) && (!req.adminCtx || user.role === 'admin'), passwordSet: auth.hasPassword(), multiuser: config.multiuser, user });
 });
 
 app.post(
@@ -94,8 +124,7 @@ app.post(
   wrap(async (req, res) => {
     if (config.instance) throw fail('No encontrado', 404);
     if (!auth.hasPassword()) throw fail('No hay contraseña configurada. Ejecuta: node bin/set-password.js', 409);
-    const onAdmin = gateway.isAdminHost(req);
-    const username = onAdmin ? users.ownerName() : config.multiuser ? String(req.body?.username || '').trim().toLowerCase() : users.ownerName();
+    const username = req.adminCtx ? users.ownerName() : config.multiuser ? String(req.body?.username || '').trim().toLowerCase() : users.ownerName();
     const keys = [req.ip, `u:${username}`];
     keys.forEach((k) => auth.checkRate(k));
     const user = await users.authenticate(username, req.body?.password);
