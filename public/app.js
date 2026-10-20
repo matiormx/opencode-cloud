@@ -2171,10 +2171,11 @@ async function settingsModal(section, { admin = false } = {}) {
       </details>`;
   };
 
-  const viewTitles = { oc: 'OpenCode', conn: 'Conexiones', ia: 'IA y OpenCode', ext: 'Extensiones', sk: 'Habilidades', users: 'Usuarios', red: 'Salida a internet', upd: 'Actualizaciones', app: 'Aplicación', pw: 'Contraseña' };
+  const viewTitles = { oc: 'OpenCode', conn: 'Conexiones', ia: 'IA y OpenCode', ext: 'Extensiones', br: 'Navegador (Chromium)', sk: 'Habilidades', users: 'Usuarios', red: 'Salida a internet', upd: 'Actualizaciones', app: 'Aplicación', pw: 'Contraseña' };
+  let br = null; // estado de Chromium (solo administrador)
   const legacy = { update: 'upd', egress: 'red' };
   let curView = legacy[section] || (viewTitles[section] ? section : 'main');
-  if ((curView === 'users' || curView === 'red' || curView === 'upd' || curView === 'oc') && !canAdmin) curView = 'main';
+  if ((curView === 'users' || curView === 'red' || curView === 'upd' || curView === 'oc' || curView === 'br') && !canAdmin) curView = 'main';
 
   const mainHtml = () => {
     const R = (k, icon, label, val = '', hot = false) => `<button type="button" class="srow" data-go="${k}"><span class="si">${ico(icon, 'width="22" height="22"')}</span><span class="sl">${label}</span>${val ? `<span class="sv${hot ? ' hot' : ''}">${esc(val)}</span>` : ''}<span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></button>`;
@@ -2194,7 +2195,7 @@ async function settingsModal(section, { admin = false } = {}) {
       ${settings.adminUrl ? `<div class="scard"><a class="srow" href="${esc(settings.adminUrl)}" target="_blank" rel="noopener noreferrer"><span class="si">${ico(I.tusers, 'width="22" height="22"')}</span><span class="sl">Panel de administración</span><span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></a></div>` : ''}`}
       ${admin ? `<div class="sgl">Recursos</div><div class="scard" style="padding:10px 12px" id="adm-sys">${sysCardHtml()}</div>` : ''}
       ${canAdmin ? `<div class="sgl">Servidor</div>
-      <div class="scard">${R('users', I.tusers, 'Usuarios', usersVal)}${R('red', I.tred, 'Salida a internet', egVal)}${admin ? R('oc', I.tia, 'OpenCode', 'Actualizar') : ''}${R('upd', I.upd, 'Actualizaciones', u?.behind ? `${u.behind} nueva${u.behind > 1 ? 's' : ''}` : (u?.version ? `v${u.version}` : ''), Boolean(u?.behind))}</div>` : ''}
+      <div class="scard">${R('users', I.tusers, 'Usuarios', usersVal)}${R('red', I.tred, 'Salida a internet', egVal)}${admin ? R('oc', I.tia, 'OpenCode', 'Actualizar') + R('br', I.tpuz, 'Navegador (Chromium)', br?.browser ? (br.browser.installed ? 'Instalado' : br.browser.installing ? 'Instalando…' : 'Sin instalar') : '', br?.browser && !br.browser.installed && !br.browser.installing) : ''}${R('upd', I.upd, 'Actualizaciones', u?.behind ? `${u.behind} nueva${u.behind > 1 ? 's' : ''}` : (u?.version ? `v${u.version}` : ''), Boolean(u?.behind))}</div>` : ''}
       <div class="scard" style="margin-top:22px">${admin ? R('pw', I.lock, 'Contraseña') : ''}${R('app', I.phone, 'Instalar aplicación', isStandalone() ? 'Instalada' : '')}</div>
       <div class="sgl">Apariencia</div>
       <div class="themes">${[['light', 'Claro'], ['dark', 'Oscuro'], ['system', 'Sistema']].map(([k, l]) => `<button type="button" class="theme-opt${theme === k ? ' on' : ''}" data-theme-set="${k}"><span class="tp ${k}"></span><span>${l}</span></button>`).join('')}</div>
@@ -2268,7 +2269,8 @@ async function settingsModal(section, { admin = false } = {}) {
     <div class="row wrap"><button class="btn primary" id="oc-upgrade-idle">Actualizar cuando todos estén libres</button><button class="btn" id="oc-upgrade">Actualizar ahora</button></div>
     <div id="oc-logbox"></div>
     <div class="rs-slot" data-only="pending" style="margin-top:12px"></div>
-    <h3>Navegador para los usuarios (Chromium)</h3>
+    </div>
+    <div class="tabpane" data-pane="br"${curView === 'br' ? '' : ' hidden'}>
     <p class="muted" style="margin-top:0">Lo usa la extensión Playwright, para que OpenCode abra páginas y haga capturas. Se instala una sola vez en el servidor y después cada usuario lo activa en su Ajustes → Extensiones.</p>
     <div id="br-block"><p class="muted">Cargando…</p></div></div>` : ''}
 
@@ -2369,7 +2371,6 @@ async function settingsModal(section, { admin = false } = {}) {
   }
 
   // Chromium (Playwright): se instala una vez para todos desde aquí; los usuarios solo lo activan
-  let br = null;
   let brTimer = null;
   let brSent = null; // { at, installed }: petición enviada al ayudante, a la espera de que empiece
   const brWaiting = () => brSent && !br.browser.error && !br.browser.installing && br.browser.installed === brSent.installed && Date.now() - brSent.at < 30_000;
@@ -2388,6 +2389,7 @@ async function settingsModal(section, { admin = false } = {}) {
   const drawBr = () => {
     const el = q('#br-block'); if (!el) return;
     el.innerHTML = brHtml();
+    try { drawMain(); } catch { /* aún no existe */ }
     clearTimeout(brTimer);
     if ((br?.browser?.installing || brWaiting()) && m.el.isConnected) brTimer = setTimeout(brLoad, brWaiting() ? 1500 : 3000);
   };
