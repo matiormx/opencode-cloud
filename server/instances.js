@@ -110,7 +110,10 @@ export async function activity(name, fresh = false) {
     v = await new Promise((resolve) => {
       const rq = http.request({ host: '127.0.0.1', port: k.port, path: '/api/activity', method: 'GET', timeout: 2500, headers: { 'x-oc-gateway': k.secret, 'x-oc-user': name } }, (r) => {
         let b = ''; r.setEncoding('utf8'); r.on('data', (d) => { if (b.length < 200000) b += d; });
-        r.on('end', () => { try { const j = JSON.parse(b); if (r.statusCode !== 200 || !Array.isArray(j.busy)) return resolve(null); resolve({ busy: (j.busy || []).length, queued: Number(j.queued) || 0, projects: [...new Set((j.busy || []).map((x) => x.projectName))].slice(0, 5) }); } catch { resolve(null); } });
+        r.on('end', () => { try { const j = JSON.parse(b); if (r.statusCode !== 200 || !Array.isArray(j.busy)) return resolve(null); const all = (j.busy || []).length;
+          // Trabajo real = trabajando o reintentando; esperando un permiso o una respuesta del usuario no cuenta (instancias antiguas: todo cuenta)
+          const working = Array.isArray(j.sessions) ? j.sessions.filter((x) => x.state === 'working' || x.state === 'retrying').length : all;
+          resolve({ busy: all, working, waiting: all - working, queued: Number(j.queued) || 0, projects: [...new Set((j.busy || []).map((x) => x.projectName))].slice(0, 5) }); } catch { resolve(null); } });
       });
       rq.on('timeout', () => rq.destroy()); rq.on('error', () => resolve(null)); rq.end();
     });
@@ -121,10 +124,10 @@ export async function activity(name, fresh = false) {
 
 // Pide a la instancia de un usuario que bloquee (o libere) las tareas nuevas por un reinicio programado.
 // La instancia lo da por caducado a los 45 s si no se renueva, así que si la pasarela cae no queda bloqueada.
-export function setDrain(name, on, deadline = 0) {
+export function setDrain(name, on) {
   const k = keys(name);
   if (!k) return Promise.resolve(false);
-  const body = JSON.stringify({ on: Boolean(on), deadline });
+  const body = JSON.stringify({ on: Boolean(on) });
   return new Promise((resolve) => {
     const rq = http.request({
       host: '127.0.0.1', port: k.port, path: '/api/drain', method: 'POST', timeout: 2500,

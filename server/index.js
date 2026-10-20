@@ -357,9 +357,11 @@ router.post(
   adminOnly,
   wrap(async (req, res) => {
     // when:'idle' → se espera a que ningún espacio esté trabajando (persistente); por defecto, ahora mismo
-    if (req.body?.when === 'idle') return res.json({ ok: true, ...(await restarts.schedule()) });
+    if (req.body?.when === 'idle') return res.json({ ok: true, ...(await restarts.schedule('restart-all')) });
+    // Forzar ahora (el administrador es quien responde): si había algo programado, se hace esa misma acción
+    const action = restarts.pendingAction() || 'restart-all';
     await restarts.cancel();
-    await instances.request('restart-all');
+    await instances.request(action);
     res.json({ ok: true, ...(await restarts.status()) });
   }),
 );
@@ -1038,49 +1040,25 @@ router.get(
     res.json({ running: oc.isRunning(), healthy: Boolean(h?.healthy), version: h?.version || null, logs: oc.logs() });
   }),
 );
-// Estado del bloqueo de tareas nuevas por reinicio programado (lo consulta la WebUI para avisar)
+// Estado del bloqueo de tareas nuevas por reinicio programado por el administrador (lo consulta la WebUI para avisar)
 router.get('/maintenance', wrap(async (req, res) => res.json(drain.info())));
 // La pasarela pide bloquear (o liberar) las tareas nuevas de este espacio. Solo desde la pasarela: los usuarios no llegan aquí.
 router.post('/drain', wrap(async (req, res) => {
   if (!config.instance) throw fail('No encontrado', 404);
-  drain.setGlobal(Boolean(req.body?.on), req.body?.deadline);
+  drain.set(Boolean(req.body?.on));
   res.json({ ok: true });
 }));
-
-// Reiniciar OpenCode. Con when:'idle' no se interrumpe nada: se bloquean las tareas nuevas de este espacio, se espera a que
-// terminen las conversaciones en curso y entonces se reinicia (si no hay ninguna, al momento).
-const SELF_WAIT_MS = 30 * 60_000;
-let selfTimer = null;
-let selfStreak = 0;
-const stopSelfWait = () => { clearInterval(selfTimer); selfTimer = null; selfStreak = 0; drain.setMine(null); };
-async function selfTick() {
-  try {
-    const mine = drain.getMine();
-    if (!mine) return stopSelfWait();
-    const busy = (await collectSessions()).length;
-    selfStreak = busy ? 0 : selfStreak + 1;
-    if (selfStreak >= 2 || Date.now() > mine.deadline) { await oc.restart(); stopSelfWait(); }
-  } catch (err) { console.error('[reinicio]', err.message); }
-}
-router.post('/opencode/restart', wrap(async (req, res) => {
-  if (req.body?.when !== 'idle') { await oc.restart(); return res.json({ ok: true, restarted: true }); }
-  const busy = (await collectSessions()).length;
-  if (!busy) { await oc.restart(); return res.json({ ok: true, restarted: true, busy: 0 }); }
-  if (!drain.getMine()) {
-    drain.setMine({ deadline: Date.now() + SELF_WAIT_MS });
-    selfStreak = 0;
-    selfTimer = setInterval(selfTick, 4000);
-    selfTimer.unref?.();
-  }
-  res.json({ ok: true, restarted: false, busy, ...drain.info() });
-}));
-router.post('/opencode/restart-cancel', wrap(async (req, res) => { stopSelfWait(); res.json({ ok: true, ...drain.info() }); }));
+// Reiniciar el OpenCode de este espacio afecta solo a su dueño: lo decide él (la WebUI avisa si hay algo trabajando)
+router.post('/opencode/restart', wrap(async (req, res) => { await oc.restart(); res.json({ ok: true }); }));
 router.post(
   '/opencode/upgrade',
   notInstance,
   wrap(async (req, res) => {
     if (config.multiuser) {
-      // El OpenCode de todos los espacios es una copia de root: se actualiza con el ayudante, que reinicia los espacios
+      // El OpenCode de todos los espacios es una copia de root: se actualiza con el ayudante, que reinicia los espacios.
+      // when:'idle' → se programa: nadie inicia tareas nuevas y se actualiza cuando todos estén libres
+      if (req.body?.when === 'idle') return res.json({ ok: true, scheduled: true, ...(await restarts.schedule('upgrade-opencode')) });
+      await restarts.cancel();
       const r = await instances.request('upgrade-opencode');
       return res.json({ ok: true, output: r.message || 'OpenCode actualizado' });
     }
@@ -1093,7 +1071,12 @@ router.post(
 // --- Actualizaciones de esta aplicación (desde GitHub) ---
 router.get('/update/status', wrap(async (req, res) => res.json(req.query.refresh === '1' ? await updater.check({ refresh: true }) : await updater.peek())));
 // Tras actualizar el código, los espacios de los usuarios también se reinician para usar la versión nueva
-router.post('/update/apply', notInstance, wrap(async (req, res) => { const r = await updater.apply(); if (config.multiuser) instances.fire('restart-all'); res.json(r); }));
+// when:'idle' → la app se actualiza ya, pero los espacios (que siguen con el código anterior) se reinician cuando todos estén libres
+router.post('/update/apply', notInstance, wrap(async (req, res) => {
+  const r = await updater.apply();
+  if (config.multiuser) { if (req.body?.when === 'idle') await restarts.schedule('restart-all'); else instances.fire('restart-all'); }
+  res.json(r);
+}));
 router.post('/update/rollback', notInstance, wrap(async (req, res) => { const r = await updater.rollback(); if (config.multiuser) instances.fire('restart-all'); res.json(r); }));
 
 // ---------- Errores ----------
