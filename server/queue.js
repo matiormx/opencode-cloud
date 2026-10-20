@@ -25,7 +25,7 @@ let ticking = false;
 
 export function list(projectId, sessionId) {
   return {
-    items: data.items.filter((i) => i.projectId === projectId && i.sessionId === sessionId).map(({ id, text, at }) => ({ id, text, at })),
+    items: data.items.filter((i) => i.projectId === projectId && i.sessionId === sessionId).map(({ id, text, at, model }) => ({ id, text, at, ...(model ? { model } : {}) })),
     paused: Boolean(data.paused[keyOf(projectId, sessionId)]),
   };
 }
@@ -56,14 +56,21 @@ export function remove(projectId, sessionId, id) {
   }
 }
 
-// Edita el texto de una petición que sigue en la cola
-export function update(projectId, sessionId, id, text) {
-  text = String(text || '').trim();
-  if (!text) throw Object.assign(new Error('El mensaje no puede quedar vacío'), { status: 400 });
-  if (text.length > MAX_TEXT) throw Object.assign(new Error('Mensaje demasiado largo'), { status: 400 });
+// Edita el texto y/o el modelo de una petición que sigue en la cola
+export function update(projectId, sessionId, id, text, model) {
   const item = data.items.find((i) => i.id === id && i.projectId === projectId && i.sessionId === sessionId);
   if (!item) throw Object.assign(new Error('Esa petición ya se envió o no existe'), { status: 404 });
-  item.text = text;
+  if (text !== undefined) {
+    text = String(text || '').trim();
+    if (!text) throw Object.assign(new Error('El mensaje no puede quedar vacío'), { status: 400 });
+    if (text.length > MAX_TEXT) throw Object.assign(new Error('Mensaje demasiado largo'), { status: 400 });
+    item.text = text;
+  }
+  if (model !== undefined) {
+    if (model === null) delete item.model; // sin modelo propio: el que tenga la conversación
+    else if (model?.providerID && model?.modelID) item.model = { providerID: String(model.providerID).slice(0, 100), modelID: String(model.modelID).slice(0, 200) };
+    else throw Object.assign(new Error('Modelo no válido'), { status: 400 });
+  }
   persist();
 }
 

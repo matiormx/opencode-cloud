@@ -892,7 +892,7 @@ router.delete('/projects/:id/sessions/:sid/queue/:qid', wrap(async (req, res) =>
 router.patch('/projects/:id/sessions/:sid/queue/:qid', wrap(async (req, res) => {
   const p = getProject(req);
   if (!/^[a-f0-9]{1,32}$/.test(req.params.qid)) throw fail('Elemento no válido');
-  queue.update(p.id, sid(req), req.params.qid, req.body?.text);
+  queue.update(p.id, sid(req), req.params.qid, req.body?.text, req.body?.model);
   res.json({ ok: true });
 }));
 router.put('/projects/:id/sessions/:sid/queue/order', wrap(async (req, res) => {

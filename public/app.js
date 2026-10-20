@@ -1092,7 +1092,7 @@ function renderQueue() {
     ? '<button class="btn small primary" data-act="queue-resume">Reanudar</button>'
     : `<button class="btn small" data-act="queue-pause" title="Guarda la cola sin enviar nada hasta que la reanudes">${ico(I.pause, 'width="14" height="14"')} Pausar</button>`}<button class="btn small ghost" data-act="queue-clear">Vaciar</button></div>` +
     (paused ? '<div class="queue-note">Guardadas: no se enviarán hasta que pulses Reanudar.</div>' : '') +
-    items.map((i, n) => `<div class="queue-item"><span class="queue-n">${n + 1}</span><button type="button" class="queue-text" data-act="queue-edit" data-id="${esc(i.id)}" title="Toca para editar">${esc(i.text.length > 160 ? `${i.text.slice(0, 160)}…` : i.text)}</button>`
+    items.map((i, n) => `<div class="queue-item"><span class="queue-n">${n + 1}</span><button type="button" class="queue-text" data-act="queue-edit" data-id="${esc(i.id)}" title="Toca para editar">${esc(i.text.length > 160 ? `${i.text.slice(0, 160)}…` : i.text)}${i.model ? `<span class="queue-model">${esc(modelName(itemModelKey(i)))}</span>` : ''}</button>`
       + ib('queue-up', I.up, 'Subir', `data-id="${esc(i.id)}"${n === 0 ? ' disabled' : ''}`) + ib('queue-down', I.down, 'Bajar', `data-id="${esc(i.id)}"${n === items.length - 1 ? ' disabled' : ''}`)
       + ib('queue-del', I.x, 'Quitar de la cola', `data-id="${esc(i.id)}"`) + '</div>').join('');
 }
@@ -1109,20 +1109,30 @@ async function queueMove(id, dir) {
   await loadQueue();
 }
 
+const modelName = (key) => allModels().find((x) => x.key === key)?.name || key.split('::')[1] || key;
+const itemModelKey = (it) => (it?.model ? `${it.model.providerID}::${it.model.modelID}` : '');
+
 function queueEditModal(id) {
   const it = state.queue.items.find((i) => i.id === id);
   if (!it) return;
   const pid = state.project.id; const sid = state.sessionId;
+  let key = itemModelKey(it); // '' = el modelo que tenga la conversación
+  const label = () => (key ? modelName(key) : 'El de la conversación');
   const m = openModal('Editar petición', `<div class="field"><textarea id="qe-text" rows="8" maxlength="20000" autocomplete="off" autocapitalize="sentences" data-lpignore="true" data-1p-ignore="true" data-bwignore="true">${esc(it.text)}</textarea></div>
+    <div class="field"><label>Modelo de lenguaje</label><button class="btn" id="qe-model" type="button" style="width:100%;justify-content:space-between"><span id="qe-mname">${esc(label())}</span>${ico(I.chev, 'width="16" height="16"')}</button></div>
     <p class="muted" style="font-size:12.5px;margin:0 0 10px">Si OpenCode la envía mientras editas, el cambio ya no se aplica.</p>
     <div class="row wrap"><button class="btn primary grow" id="qe-save" type="button">Guardar</button></div>`);
+  $('#qe-model', m.el).addEventListener('click', () => modelPicker({ current: key || state.model, onPick: (k) => { key = k; $('#qe-mname', m.el).textContent = label(); } }));
   $('#qe-save', m.el).addEventListener('click', async (e) => {
     try {
-      await busyBtn(e.currentTarget, 'Guardando…', () => api('PATCH', `/api/projects/${pid}/sessions/${sid}/queue/${id}`, { text: $('#qe-text', m.el).value }));
+      const [providerID, modelID] = key.split('::');
+      const body = { text: $('#qe-text', m.el).value };
+      if (providerID && modelID && key !== itemModelKey(it)) body.model = { providerID, modelID };
+      await busyBtn(e.currentTarget, 'Guardando…', () => api('PATCH', `/api/projects/${pid}/sessions/${sid}/queue/${id}`, body));
       m.close(); await loadQueue();
     } catch (err) { toast(err.message, 'err'); }
   });
-  setTimeout(() => $('#qe-text', m.el)?.focus(), 80);
+  setTimeout(() => { if (matchMedia('(min-width: 860px)').matches) $('#qe-text', m.el)?.focus(); }, 80);
 }
 
 function setBusy(v) {
@@ -1565,7 +1575,8 @@ function renderModels() {
   btn.innerHTML = `<span class="model-name">${esc(cur?.name || value)}</span>${ico(I.chev, 'width="16" height="16"')}`;
 }
 
-function modelPicker() {
+// `current` y `onPick` permiten reutilizarlo para elegir el modelo de otra cosa (p. ej. una petición de la cola)
+function modelPicker({ current = state.model, onPick = null } = {}) {
   const providers = visibleProviders();
   if (!providers.length) { toast('No hay modelos visibles. Muéstralos en Ajustes → Proveedores de IA.'); return; }
   const m = openModal('Elegir modelo', `
@@ -1574,7 +1585,7 @@ function modelPicker() {
     <div id="mp-list"></div>`, {});
   const row = (x) => {
     const fav = (state.models.favorites || []).includes(x.key);
-    return `<div class="mp-row ${x.key === state.model ? 'sel' : ''}"><button class="mp-pick" data-key="${esc(x.key)}"><span class="mp-name">${esc(x.name)}</span><span class="mp-prov">${esc(x.provider)}</span></button><button class="mp-star ${fav ? 'on' : ''}" data-fav="${esc(x.key)}" aria-label="${fav ? 'Quitar de favoritos' : 'Añadir a favoritos'}" aria-pressed="${fav}">${ico(I.star, `width="20" height="20" ${fav ? 'style="fill:currentColor"' : ''}`)}</button></div>`;
+    return `<div class="mp-row ${x.key === current ? 'sel' : ''}"><button class="mp-pick" data-key="${esc(x.key)}"><span class="mp-name">${esc(x.name)}</span><span class="mp-prov">${esc(x.provider)}</span></button><button class="mp-star ${fav ? 'on' : ''}" data-fav="${esc(x.key)}" aria-label="${fav ? 'Quitar de favoritos' : 'Añadir a favoritos'}" aria-pressed="${fav}">${ico(I.star, `width="20" height="20" ${fav ? 'style="fill:currentColor"' : ''}`)}</button></div>`;
   };
   const draw = () => {
     const term = $('#mp-q', m.el).value.trim().toLowerCase();
@@ -1595,7 +1606,8 @@ function modelPicker() {
     const pick = e.target.closest('[data-key]');
     const star = e.target.closest('[data-fav]');
     if (pick) {
-      state.model = pick.dataset.key; store.set('model', state.model); renderModels(); m.close();
+      if (onPick) onPick(pick.dataset.key); else { state.model = pick.dataset.key; store.set('model', state.model); renderModels(); }
+      m.close();
     } else if (star) {
       const k = star.dataset.fav;
       const prev = state.models.favorites || [];
