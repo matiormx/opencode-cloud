@@ -75,10 +75,10 @@ function pruneSessions(sessions) {
   return sessions;
 }
 
-export function createSession(user = '', kind = 'work') {
+export function createSession(user = '', kind = 'work', { via = '', hours = 0 } = {}) {
   const token = crypto.randomBytes(32).toString('hex');
   const sessions = pruneSessions(store.load('sessions', {}));
-  sessions[sha256(token)] = { exp: Date.now() + config.sessionDays * 86400 * 1000, user, kind };
+  sessions[sha256(token)] = { exp: Date.now() + (hours ? hours * 3600 : config.sessionDays * 86400) * 1000, user, kind, ...(via ? { via } : {}) };
   store.save('sessions', sessions);
   return token;
 }
@@ -107,7 +107,7 @@ export function sessionInfo(req) {
   if (!v) return null;
   const s = norm(v);
   if ((s.kind || 'work') !== kind) return null; // una cookie no vale para el otro tipo de sesión
-  return s.exp > Date.now() ? { user: s.user } : null;
+  return s.exp > Date.now() ? { user: s.user, via: s.via || '' } : null;
 }
 
 // En modo instancia no hay login: solo se aceptan las peticiones que traen el secreto de la pasarela
@@ -132,8 +132,8 @@ export function destroySession(req) {
   store.save('sessions', sessions);
 }
 
-export function setCookie(res, token, kind = 'work') {
-  const maxAge = config.sessionDays * 86400;
+export function setCookie(res, token, kind = 'work', hours = 0) {
+  const maxAge = hours ? hours * 3600 : config.sessionDays * 86400;
   const flags = ['HttpOnly', 'SameSite=Strict', `Path=${kind === 'admin' ? '/admin' : '/'}`, `Max-Age=${maxAge}`];
   if (config.secureCookies) flags.push('Secure');
   res.setHeader('Set-Cookie', `${cookieOf(kind)}=${token}; ${flags.join('; ')}`);

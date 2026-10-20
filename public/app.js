@@ -2154,7 +2154,7 @@ async function settingsModal(section, { admin = false } = {}) {
     const R = (k, icon, label, val = '', hot = false) => `<button type="button" class="srow" data-go="${k}"><span class="si">${ico(icon, 'width="22" height="22"')}</span><span class="sl">${label}</span>${val ? `<span class="sv${hot ? ' hot' : ''}">${esc(val)}</span>` : ''}<span class="sc">${ico(I.chevr, 'width="18" height="18"')}</span></button>`;
     const me = state.multiuser && state.me ? state.me : null;
     const title = me ? me.name : (gh.connected ? gh.login : 'OpenCode Cloud');
-    const sub = me ? (me.role === 'admin' ? 'Administrador' : 'Usuario') : (gh.connected ? 'GitHub conectado' : 'GitHub sin conectar');
+    const sub = me ? (me.role === 'admin' ? 'Administrador' : me.via === 'admin' ? 'Sesión del administrador' : 'Usuario') : (gh.connected ? 'GitHub conectado' : 'GitHub sin conectar');
     const u = state.update;
     const theme = store.get('theme', 'system');
     const egVal = !eg ? '' : !eg.helper ? 'Sin ayudante' : eg.active ? 'Activa' : eg.configured ? 'Desactivada' : 'Sin configurar';
@@ -2344,7 +2344,11 @@ async function settingsModal(section, { admin = false } = {}) {
   };
   const userAct = async (name, act, u) => {
     try {
-      if (act === 'pass') passModal(name);
+      if (act === 'enter') {
+        if (!confirm(`Entrarás en el espacio de ${name}: verás sus proyectos, conversaciones y claves. Queda registrado y la sesión dura 12 horas. ¿Continuar?`)) return;
+        const r = await api('POST', `/api/users/${encodeURIComponent(name)}/enter`);
+        location.assign(r.url);
+      } else if (act === 'pass') passModal(name);
       else if (act === 'del') delModal(name);
       else if (act === 'restart') {
         const fresh = (await api('GET', '/api/users').catch(() => null))?.users?.find((x) => x.name === name);
@@ -2363,6 +2367,7 @@ async function settingsModal(section, { admin = false } = {}) {
   const userMenu = (name) => {
     const u = usersData?.users?.find((x) => x.name === name);
     const mm = openModal(name, `<div class="stack">
+      ${u?.disabled ? '' : `<button class="btn primary" data-ma="enter">Entrar como ${esc(name)}</button>`}
       <button class="btn" data-ma="pass">Cambiar contraseña</button>
       ${u?.disabled ? '' : '<button class="btn" data-ma="restart">Reiniciar espacio</button>'}
       <button class="btn" data-ma="toggle">${u?.disabled ? 'Activar usuario' : 'Desactivar usuario'}</button>

@@ -111,7 +111,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 const meInfo = (req) => {
   const info = auth.sessionInfo(req);
   if (!info || (info.user && !users.isActive(info.user))) return null;
-  return { name: info.user || (config.multiuser ? users.ownerName() : 'admin'), role: info.user ? 'user' : 'admin' };
+  return { name: info.user || (config.multiuser ? users.ownerName() : 'admin'), role: info.user ? 'user' : 'admin', ...(info.via ? { via: info.via } : {}) };
 };
 
 app.get('/api/me', (req, res) => {
@@ -338,6 +338,22 @@ router.put(
 );
 
 // --- Usuarios (solo administrador, modo multiusuario) ---
+// El administrador puede entrar en el espacio de un usuario sin su contraseña (sesión de trabajo corta, queda en el registro)
+router.post(
+  '/users/:name/enter',
+  multiOnly,
+  adminOnly,
+  wrap(async (req, res) => {
+    const name = String(req.params.name);
+    if (!users.list().some((u) => u.name === name && u.role !== 'admin' && !u.disabled)) throw fail('Usuario no encontrado o desactivado', 404);
+    console.log(`[admin] el administrador entra como «${name}» (desde ${req.ip})`);
+    const hours = 12;
+    auth.setCookie(res, auth.createSession(name, 'work', { via: 'admin', hours }), 'work', hours);
+    instances.probe(name).then((up) => { if (!up) instances.nudge(name); });
+    res.json({ ok: true, url: `/u/${name}/` });
+  }),
+);
+
 router.get(
   '/users',
   multiOnly,
