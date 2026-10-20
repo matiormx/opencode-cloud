@@ -84,68 +84,94 @@ if [ -z "$GITHUB_TOKEN" ] && [ -f "$DATA_DIR/settings.json" ]; then
   [ -n "$GITHUB_TOKEN" ] && ASK_TOKEN=0
 fi
 
+# El repositorio público no necesita token: no se pregunta
+if [ "$ASK_TOKEN" = 1 ] && GIT_TERMINAL_PROMPT=0 timeout 15 git -c credential.helper= ls-remote "$REPO_URL" HEAD >/dev/null 2>&1; then ASK_TOKEN=0; fi
+
 if [ "$INTERACTIVE" = 1 ]; then
-  echo
-  printf '\033[1mConfiguración de OpenCode Cloud\033[0m  (Enter = valor por defecto)\n\n' >/dev/tty
+  T() { printf '%b\n' "$*" >/dev/tty; }                      # línea normal
+  N() { printf '  \033[2m%s\033[0m\n' "$*" >/dev/tty; }       # nota atenuada
+  STEP=0
+  step() { STEP=$((STEP + 1)); T "\n\033[1;36m▌ Paso $STEP · $*\033[0m"; }
+
+  T "\n\033[1mOpenCode Cloud · instalación\033[0m"
+  N "Te hago unas preguntas cortas."
+  N "Pulsa Enter para aceptar lo recomendado."
 
   if [ "$ASK_DOMAIN" = 1 ]; then
-    echo "Dominio para HTTPS automático (el DNS debe apuntar ya a este servidor y los puertos 80/443 estar abiertos)." >/dev/tty
+    step "Dirección web"
+    N "Con un dominio tendrás HTTPS automático."
+    N "Su DNS debe apuntar ya a este servidor."
     while :; do
-      ask "Dominio (vacío = sin dominio): " DOMAIN
+      ask "  Dominio (Enter = sin dominio): " DOMAIN
       DOMAIN="${DOMAIN#http://}"; DOMAIN="${DOMAIN#https://}"; DOMAIN="${DOMAIN%%/*}"
       [ -z "$DOMAIN" ] || [[ "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] && break
-      echo "  Dominio no válido, prueba de nuevo." >/dev/tty
+      T "  \033[31mDominio no válido.\033[0m Prueba de nuevo."
     done
   fi
   if [ -z "$DOMAIN" ] && [ "$ASK_EXPOSE" = 1 ]; then
-    echo "Sin dominio el servicio solo escucha en 127.0.0.1 (acceso por túnel SSH)." >/dev/tty
-    if yesno "¿Exponerlo por HTTP sin cifrar en el puerto $PORT? (no recomendado)" n; then EXPOSE_HTTP=1; fi
+    step "Acceso sin dominio"
+    N "Solo escucha en este servidor (túnel SSH)."
+    if yesno "  ¿Abrirlo por HTTP sin cifrar? (no recomendado)" n; then EXPOSE_HTTP=1; fi
   fi
 
   if [ "$ASK_PASSWORD" = 1 ]; then
+    step "Contraseña del administrador"
+    N "Con ella entrarás como «admin»."
+    N "No se ve lo que escribes."
     if [ -f "$DATA_DIR/auth.json" ]; then
-      if yesno "Ya existe una contraseña de administrador. ¿Cambiarla?" n; then
+      if yesno "  Ya hay una contraseña. ¿Cambiarla?" n; then
         while :; do
-          ask "Nueva contraseña (mín. 8 caracteres): " ADMIN_PASSWORD secret
-          [ "${#ADMIN_PASSWORD}" -ge 8 ] || { echo "  Demasiado corta." >/dev/tty; continue; }
-          ask "Repítela: " PW2 secret
+          ask "  Nueva (mín. 8 caracteres): " ADMIN_PASSWORD secret
+          [ "${#ADMIN_PASSWORD}" -ge 8 ] || { T "  \033[31mDemasiado corta.\033[0m"; continue; }
+          ask "  Repítela: " PW2 secret
           [ "$ADMIN_PASSWORD" = "$PW2" ] && break
-          echo "  No coinciden." >/dev/tty
+          T "  \033[31mNo coinciden.\033[0m"
         done
       fi
     else
+      N "Enter = que la genere yo (te la muestro al final)."
       while :; do
-        ask "Contraseña de administrador (vacío = generar una aleatoria): " ADMIN_PASSWORD secret
+        ask "  Contraseña (mín. 8, o Enter): " ADMIN_PASSWORD secret
         [ -z "$ADMIN_PASSWORD" ] && break
-        [ "${#ADMIN_PASSWORD}" -ge 8 ] || { echo "  Mínimo 8 caracteres." >/dev/tty; continue; }
-        ask "Repítela: " PW2 secret
+        [ "${#ADMIN_PASSWORD}" -ge 8 ] || { T "  \033[31mMínimo 8 caracteres.\033[0m"; continue; }
+        ask "  Repítela: " PW2 secret
         [ "$ADMIN_PASSWORD" = "$PW2" ] && break
-        echo "  No coinciden." >/dev/tty
+        T "  \033[31mNo coinciden.\033[0m"
       done
     fi
   fi
 
-  if [ "$ASK_TOKEN" = 1 ]; then
-    echo "Token de GitHub: necesario si el repositorio es privado; la WebUI lo usa para actualizarse y sincronizar." >/dev/tty
-    echo "  No hace falta tu usuario, se detecta solo. Créalo aquí (ya con los permisos rellenados):" >/dev/tty
-    echo "  https://github.com/settings/personal-access-tokens/new?name=OpenCode+Cloud&expires_in=90&contents=write&pull_requests=write" >/dev/tty
-    echo "  (o uno clásico: https://github.com/settings/tokens/new?scopes=repo&description=OpenCode+Cloud)" >/dev/tty
-    ask "Token (vacío = omitir; se podrá añadir luego en Ajustes): " GITHUB_TOKEN secret
-  fi
-
   if [ "$ASK_PERMISSION" = 1 ]; then
-    if yesno "¿Dejar que OpenCode edite archivos y ejecute comandos SIN pedir permiso?" n; then OC_PERMISSION=allow; fi
+    step "Permisos del agente"
+    N "Qué hace OpenCode al editar archivos"
+    N "o ejecutar comandos:"
+    T "    \033[1m1\033[0m  Pedirme permiso cada vez  \033[2m(recomendado)\033[0m"
+    T "    \033[1m2\033[0m  Hacerlo sin preguntar"
+    while :; do
+      ask "  Elige 1 o 2 [1]: " PERM_CHOICE
+      case "${PERM_CHOICE:-1}" in 1) OC_PERMISSION=ask; break;; 2) OC_PERMISSION=allow; break;; esac
+      T "  \033[31mEscribe 1 o 2.\033[0m"
+    done
   fi
 
+  if [ "$ASK_TOKEN" = 1 ]; then
+    step "Acceso a GitHub"
+    N "El repositorio es privado: hace falta un"
+    N "token para descargarlo y actualizarlo."
+    N "Créalo con la casilla «repo» en:"
+    N "github.com/settings/tokens"
+    ask "  Token (Enter = omitir): " GITHUB_TOKEN secret
+  fi
+
+  T "\n\033[1;36m▌ Resumen\033[0m"
+  if [ -n "$DOMAIN" ]; then T "  Dirección    https://$DOMAIN"
+  elif [ "$EXPOSE_HTTP" = 1 ]; then T "  Dirección    http://IP:$PORT (sin cifrar)"
+  else T "  Dirección    solo local (túnel SSH)"; fi
+  T "  Contraseña   $([ -n "$ADMIN_PASSWORD" ] && echo 'la que has puesto' || ([ -f "$DATA_DIR/auth.json" ] && echo 'la que ya había' || echo 'se generará una'))"
+  T "  Agente       $([ "$OC_PERMISSION" = allow ] && echo 'sin pedir permiso' || echo 'pide permiso')"
+  T "  Repositorio  ${REPO_URL#https://github.com/}"
   echo >/dev/tty
-  echo "Resumen:" >/dev/tty
-  echo "  Repositorio:   $REPO_URL (rama $BRANCH)" >/dev/tty
-  if [ -n "$DOMAIN" ]; then echo "  Acceso:        https://$DOMAIN (Caddy + HTTPS)" >/dev/tty
-  elif [ "$EXPOSE_HTTP" = 1 ]; then echo "  Acceso:        http://IP:$PORT (sin cifrar)" >/dev/tty
-  else echo "  Acceso:        solo local (túnel SSH)" >/dev/tty; fi
-  echo "  Token GitHub:  $([ -n "$GITHUB_TOKEN" ] && echo sí || echo no)" >/dev/tty
-  echo "  Permisos IA:   $OC_PERMISSION" >/dev/tty
-  yesno "¿Continuar con la instalación?" s || die "Instalación cancelada"
+  yesno "  ¿Instalar ahora?" s || die "Instalación cancelada"
   echo >/dev/tty
 fi
 
