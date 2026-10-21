@@ -91,6 +91,18 @@ if [ -f /etc/wireguard/ocegress.conf ]; then
     ip rule show | grep -q "lookup 51820" && ok "Regla de enrutado del usuario del servicio presente" || bad "Falta la regla 'uidrange … lookup 51820'"
     d="$(curl -4 -s -m 8 https://api.ipify.org)"; t="$(runuser -u "$APP_USER" -- curl -4 -s -m 8 https://api.ipify.org)"
     echo "  IP del VPS: ${d:-?} · IP de OpenCode: ${t:-?}"
+    # Modo multiusuario: el agente corre como ocu-<nombre> (uids 61000-61999), no como el usuario del servicio.
+    ip rule show | grep -q "61000-61999.*lookup 51820" && ok "Regla de enrutado de los usuarios (uids 61000-61999) presente" || { getent passwd | grep -q '^ocu-' && { bad "Falta la regla de los usuarios ocu-* (uidrange 61000-61999): su tráfico NO sale por el túnel"; hint "sudo $APP_DIR/deploy/egress.sh setup && sudo $APP_DIR/deploy/egress.sh on"; }; }
+    for u in $(getent passwd | awk -F: '$1 ~ /^ocu-/ {print $1}'); do
+      tu="$(runuser -u "$u" -- curl -4 -s -m 8 https://api.ipify.org 2>/dev/null)"
+      if [ -n "$tu" ] && [ "$tu" != "$d" ]; then ok "$u sale por el túnel (IP $tu)"; else bad "$u sale con ${tu:-sin conexión}: ${tu:+misma IP que el VPS, }no usa el túnel"; fi
+      # Que cada proveedor sea alcanzable desde ese usuario (código HTTP; 000 = no conecta)
+      line=""
+      for h in api.openai.com opencode.ai openrouter.ai api.deepseek.com api.anthropic.com generativelanguage.googleapis.com; do
+        code="$(runuser -u "$u" -- curl -4 -s -o /dev/null -m 8 -w '%{http_code}' "https://$h/" 2>/dev/null)"; line="$line $h=$code"
+      done
+      echo "      $line"
+    done
   else warn "Hay configuración WireGuard pero el túnel está desactivado"; hint "sudo $APP_DIR/deploy/egress.sh on"; fi
 else echo "  (no configurado)"; fi
 systemctl is-active --quiet opencode-egress.path 2>/dev/null && ok "Ayudante de WireGuard instalado" || true
