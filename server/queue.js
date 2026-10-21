@@ -6,6 +6,7 @@ import { config } from './config.js';
 import * as oc from './opencode.js';
 import * as autocommit from './autocommit.js';
 import * as drain from './drain.js';
+import * as fallback from './fallback.js';
 import * as store from './store.js';
 
 const MAX_ITEMS = 20;
@@ -129,6 +130,7 @@ async function tick() {
     const statusCache = new Map();
     for (const [k, items] of groups) {
       if (data.paused[k]) continue;
+      if (fallback.isSwitching(items[0].sessionId)) continue; // se está cambiando de modelo: no se mezcla otra petición
       const proj = projects.find((p) => p.id === items[0].projectId);
       if (!proj) { clear(items[0].projectId, items[0].sessionId); continue; }
       if (Date.now() - (lastDispatch.get(k) || 0) < COOLDOWN_MS) continue;
@@ -140,7 +142,7 @@ async function tick() {
         const next = items[0];
         await autocommit.flush(proj, statusCache.get(dir)); // lo que dejó la tarea anterior queda en un commit antes de empezar la siguiente
         const body = { parts: [{ type: 'text', text: next.text }] };
-        if (next.model) body.model = next.model;
+        if (next.model) body.model = fallback.pick(next.model); // si su modelo está sin cupo, se usa el de respaldo
         lastDispatch.set(k, Date.now());
         await oc.json('POST', `/session/${next.sessionId}/prompt_async`, { directory: dir, body });
         autocommit.note(proj.id, next.text);

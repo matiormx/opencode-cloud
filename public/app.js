@@ -2383,6 +2383,10 @@ async function settingsModal(section, { admin = false } = {}) {
     <div class="row wrap"><select id="prov-id" class="grow">${providerOptions}</select><input id="prov-key" name="provider-key-field" type="text" class="secret grow" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" placeholder="API key"><button class="btn" id="prov-save">Guardar</button></div>
     <div id="prov-help" style="margin-top:8px"></div>
 
+    <h3>Modelo de respaldo</h3>
+    <p class="muted" style="margin-top:0">Si el modelo que usas se queda sin cupo (límite de uso, créditos o plan gratuito agotado) y el proveedor impone una espera larga, la app cancela la espera y sigue la tarea con este modelo, aunque tengas la app cerrada. Elige uno de otro proveedor, con su propio cupo. Los reintentos cortos (límite por minuto) no cuentan: esos se resuelven solos.</p>
+    <div class="row wrap"><button class="btn grow" id="fb-pick" type="button" style="justify-content:space-between"><span id="fb-name">${settings.fallbackModel ? esc(modelName(`${settings.fallbackModel.providerID}::${settings.fallbackModel.modelID}`)) : 'Ninguno: elegir modelo'}</span>${ico(I.chev, 'width="16" height="16"')}</button><button class="btn ghost" id="fb-clear" type="button"${settings.fallbackModel ? '' : ' hidden'}>Quitar</button></div>
+
     <h3>OpenCode</h3>
     <p style="margin-top:0">Estado: ${oc.healthy ? '<span style="color:var(--ok)">en marcha</span>' : '<span style="color:var(--err)">no responde</span>'}${oc.version ? ` · versión ${esc(oc.version)}` : ''}</p>
     <div class="row wrap"><button class="btn" id="oc-restart">Reiniciar OpenCode</button>${canAdmin && !admin ? '<button class="btn" id="oc-upgrade">Actualizar OpenCode</button>' : ''}<button class="btn ghost" id="oc-logs">Ver registro</button></div>
@@ -2664,6 +2668,21 @@ async function settingsModal(section, { admin = false } = {}) {
 
   click('#gh-save', async (b) => { const r = await busyBtn(b, 'Comprobando…', () => api('PUT', '/api/github/token', { token: q('#gh-token').value })); toast(`Conectado como ${r.login}`); m.remove(); settingsModal('conn'); });
   click('#gh-remove', async () => { await api('DELETE', '/api/github/token'); toast('GitHub desconectado'); m.remove(); settingsModal('conn'); });
+  q('#fb-pick')?.addEventListener('click', () => modelPicker({
+    current: settings.fallbackModel ? `${settings.fallbackModel.providerID}::${settings.fallbackModel.modelID}` : state.model,
+    onPick: async (k) => {
+      const [providerID, modelID] = k.split('::');
+      try {
+        await api('PUT', '/api/settings', { fallbackModel: { providerID, modelID } });
+        settings.fallbackModel = { providerID, modelID };
+        q('#fb-name').textContent = modelName(k); q('#fb-clear').hidden = false;
+        toast('Modelo de respaldo guardado');
+      } catch (err) { toast(err.message, 'err'); }
+    },
+  }));
+  q('#fb-clear')?.addEventListener('click', async () => {
+    try { await api('PUT', '/api/settings', { fallbackModel: null }); settings.fallbackModel = null; q('#fb-name').textContent = 'Ninguno: elegir modelo'; q('#fb-clear').hidden = true; toast('Modelo de respaldo quitado'); } catch (err) { toast(err.message, 'err'); }
+  });
   q('#g-auto')?.addEventListener('change', async (e) => { try { await api('PUT', '/api/settings', { autoCommit: e.target.checked }); toast(e.target.checked ? 'Commit automático activado' : 'Commit automático desactivado'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message, 'err'); } });
   click('#g-save', async () => { await api('PUT', '/api/settings', { gitName: q('#g-name').value, gitEmail: q('#g-email').value }); toast('Identidad guardada (se aplica a nuevos commits)'); });
   m.el.querySelectorAll('[data-prov-vis]').forEach((cb) => cb.addEventListener('change', async () => {

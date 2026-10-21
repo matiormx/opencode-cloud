@@ -11,6 +11,7 @@ import * as autocommit from './autocommit.js';
 import { config } from './config.js';
 import * as drain from './drain.js';
 import * as egress from './egress.js';
+import * as fallback from './fallback.js';
 import * as ext from './extensions.js';
 import * as git from './git.js';
 import * as gateway from './gateway.js';
@@ -286,6 +287,7 @@ const publicSettings = (admin = !config.instance, adminUrl = '') => {
     gitName: s.gitName,
     gitEmail: s.gitEmail,
     autoCommit: s.autoCommit !== false,
+    fallbackModel: s.fallbackModel?.providerID ? s.fallbackModel : null,
     ocPermission: config.ocPermission,
     // Qué puede gestionar este espacio: en el de un usuario, la actualización de la app, la salida WireGuard y OpenCode las gestiona el administrador
     mode: config.instance && !admin ? 'instance' : config.multiuser || config.instance ? 'owner' : 'single',
@@ -304,6 +306,12 @@ router.put(
     if (typeof gitName === 'string' && gitName.trim()) patch.gitName = gitName.trim().slice(0, 100);
     if (typeof gitEmail === 'string' && /^[^\s@]+@[^\s@]+$/.test(gitEmail.trim())) patch.gitEmail = gitEmail.trim().slice(0, 200);
     if (typeof req.body?.autoCommit === 'boolean') patch.autoCommit = req.body.autoCommit;
+    if ('fallbackModel' in (req.body || {})) {
+      const f = req.body.fallbackModel;
+      if (f === null) patch.fallbackModel = null;
+      else if (f?.providerID && f?.modelID) patch.fallbackModel = { providerID: String(f.providerID).slice(0, 100), modelID: String(f.modelID).slice(0, 200) };
+      else throw fail('Modelo no válido');
+    }
     store.updateSettings(patch);
     res.json(publicSettings(isAdminReq(req), String(req.headers['x-oc-admin-url'] || '')));
   }),
@@ -1285,7 +1293,19 @@ if (gatewayOnly) restarts.resume();
 // Si este espacio se reinició con conversaciones pausadas, se retoman al volver OpenCode
 if (!gatewayOnly) { if (store.load('paused', { items: [] }).items?.length) queue.hold(true); resumePaused().catch((e) => console.error('[reanudar]', e.message)); }
 if (!config.instance) updater.startPeriodicCheck();
-if (!gatewayOnly) { queue.start(); autocommit.start(); }
+if (!gatewayOnly) {
+  fallback.init({
+    collectSessions,
+    lastChoice: (sx) => lastChoice(withPath(loadProjects().find((p) => p.id === sx.projectId)).path, sx.sessionId),
+    abort: (sx) => oc.json('POST', `/session/${sx.sessionId}/abort`, { directory: withPath(loadProjects().find((p) => p.id === sx.projectId)).path }).catch(() => null),
+    send: async (sx, text, model, agent) => {
+      const body = { parts: [{ type: 'text', text }], model };
+      if (agent) body.agent = agent;
+      await oc.json('POST', `/session/${sx.sessionId}/prompt_async`, { directory: withPath(loadProjects().find((p) => p.id === sx.projectId)).path, body });
+    },
+  });
+  queue.start(); autocommit.start(); fallback.start();
+}
 sysmon.start();
 if (!gatewayOnly) reqmon.start();
 
